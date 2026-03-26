@@ -1,18 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { ethers } from "ethers";
 import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { Html5QrcodeScanner } from "html5-qrcode";
-
-const contractAddress = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
-const contractABI = [
-  "function registerUser(address _user, uint8 _role) public",
-  "function createBatch(string memory _medicineName, string memory _expiryDate, string memory _location) public",
-  "function transferOwnership(uint256 _batchId, address _to, uint8 _newStatus, string memory _location) public",
-  "function getBatch(uint256 _batchId) public view returns (tuple(uint256 batchId, string medicineName, uint256 timestamp, string expiryDate, string location, address manufacturer, address currentOwner, uint8 status, bool exists))",
-  "function getBatchHistory(uint256 _batchId) public view returns (tuple(address from, address to, uint256 timestamp, uint8 status, string location)[])",
-  "function getMyRole() public view returns (uint8)",
-  "function batchCount() public view returns (uint256)"
-];
+import config from "./config.json";
+const contractAddress = config.contractAddress;
+const contractABI = config.abi;
 
 const ROLES = { 0: "None", 1: "Manufacturer", 2: "Distributor", 3: "Retailer / Healthcare Provider" };
 const STATUS = { 0: "Manufactured", 1: "In Transit", 2: "Delivered" };
