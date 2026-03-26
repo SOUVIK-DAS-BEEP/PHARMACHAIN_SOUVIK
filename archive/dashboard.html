@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard</title>
+
+
+    <link rel="stylesheet" href="css/dashboard.css" />
+    <link
+        href="https://unpkg.com/boxicons@2.1.2/css/boxicons.min.css"
+        rel="stylesheet"
+    />
+</head>
+<body>
+<nav>
+    <div class="logo">
+        <i class="bx bx-menu menu-icon"></i>
+        <span class="logo-name">Pharmatrac</span>
+    </div>
+    <div class="sidebar">
+        <div class="logo">
+            <i class="bx bx-menu menu-icon"></i>
+            <span class="logo-name">Pharmatrac</span>
+        </div>
+        <div class="sidebar-content">
+            <ul class="lists">
+                <li class="list">
+                    <a href="home.html" class="nav-link">
+                        <i class="bx bx-home-alt icon"></i>
+                        <span class="link">Home</span>
+                    </a>
+                </li>
+                <li class="list">
+                    <a href="dashboard.html" class="nav-link">
+                        <i class="bx bx-bar-chart-alt-2 icon"></i>
+                        <span class="link">Dashboard</span>
+                    </a>
+                </li>
+                
+
+                <li class="list">
+                    <a href="index.html" class="nav-link">
+                        <i class="bx bx-log-out icon"></i>
+                        <span class="link">Logout</span>
+                    </a>
+                </li>
+            </div>
+        </div>
+    </div>
+</nav>
+<section class="overlay"></section>
+<div class="Main">
+    <div class="container">
+        <div class="header">
+            <h1>List of Shipments</h1>
+            <button class="add-btn" onclick="openForm()">Add</button>
+        </div>
+        <div class="main-display" id="mainDisplay">
+            
+        </div>
+    </div>
+</div>
+
+<div class="form-popup" id="myForm">
+    <form class="form-container">
+        <button type="button" class="close-btn" onclick="closeForm()">×</button>
+        <h2>Add Item</h2>
+        <label for="customerName"><b>Customer Name</b></label>
+        <input type="text" placeholder="Enter Customer Name" id="customerName" required>
+        <label for="startAddress"><b>Starting Address</b></label>
+        <input type="text" placeholder="Enter Starting Address" id="startAddress" required>
+        <label for="deliveryAddress"><b>Delivery Address</b></label>
+        <input type="text" placeholder="Enter Delivery Address" id="deliveryAddress" required>
+        <label for="fragile"><b>Fragile</b></label>
+        <input type="checkbox" id="fragile">
+        <label for="payment"><b>Payment</b></label>
+        <input type="checkbox" id="payment">
+        <label for="receivedDate"><b>Package Received Date</b></label>
+        <input type="date" id="receivedDate" required>
+        <p><b>Estimated Delivery Date:</b> <span id="estimatedDate"></span></p>
+        <button type="button" class="btn-cancel" onclick="closeForm()">Close</button>
+        <button type="submit" class="btn-add" onclick="addItem(event)">Add</button>
+    </form>
+</div>
+
+<div class="item-popup" id="itemPopup">
+    <div class="item-container">
+        <button type="button" class="close-btn" onclick="closeItemPopup()">×</button>
+        <h2>Item Details</h2>
+        <div id="itemDetailsContent"></div>
+    </div>
+</div>
+
+<div class="Main">
+    <div class="progress-bar-container" id="progressBarContainer">
+        <div class="header">
+            <h1>Progress Bars</h1>
+            <p>Only appears when there is data in List of shipments</p>
+        </div>
+    </div>
+</div>
+
+<div class="overlay" id="overlay"></div>
+<div class="popup-form" id="popupForm">
+    <label>
+        <input type="radio" name="status" value="0"> Order Picked
+    </label>
+    <label>
+        <input type="radio" name="status" value="50"> In Transit
+    </label>
+    <label>
+        <input type="radio" name="status" value="100"> Delivered
+    </label>
+    <button class="confirm-button" id="confirmButton">Confirm</button>
+</div>
+
+<script src="/js/dashboard.js"></script>
+<script src="https://cdn.ethers.io/lib/ethers-5.7.umd.min.js" type="application/javascript"></script>
+<script src="https://cdn.jsdelivr.net/npm/web3@1.8.1/dist/web3.min.js"></script>
+<script src="js/contract.js" type="application/javascript"></script>
+</body>
+</html>
