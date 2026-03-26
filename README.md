@@ -69,7 +69,14 @@ graph TD
 
 ## ⚙️ Local Setup
 
-### 1. Prerequisites
+### 1. Clone The Repository
+
+```bash
+git clone https://github.com/Pixie-19/Pharma-Chain.git
+cd Pharma-Chain
+```
+
+### 2. Prerequisites (skip if already installed)
 
 Install the following on your machine before starting:
 
@@ -90,7 +97,7 @@ nvm install 22
 nvm use 22
 ```
 
-### 2. Install Dependencies
+### 3. Install Dependencies
 
 Open a terminal at the repository root and install dependencies in both workspaces.
 
