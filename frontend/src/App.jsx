@@ -1,6 +1,6 @@
 import { useState, useEffect, useEffectEvent, useRef } from "react";
 import { ethers } from "ethers";
-import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert, Ban, XCircle } from "lucide-react";
+import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert, Ban, XCircle, Thermometer } from "lucide-react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import config from "./config.json";
 
@@ -87,6 +87,8 @@ export default function App() {
   const [recallReason, setRecallReason] = useState("");
   const [lostId, setLostId] = useState("");
   const [lostReason, setLostReason] = useState("");
+  const [tempRejectId, setTempRejectId] = useState("");
+  const [tempRejectVal, setTempRejectVal] = useState("");
   const [rejectId, setRejectId] = useState("");
   const [rejectReason, setRejectReason] = useState("");
   const [isOwner, setIsOwner] = useState(false);
@@ -1088,7 +1090,7 @@ export default function App() {
                   <h3 className="text-xl font-bold flex items-center gap-2 mb-6 text-slate-800">
                     <ShieldCheck className="w-6 h-6 text-red-500" /> Security & Exception Handling
                   </h3>
-                  <div className="grid md:grid-cols-3 gap-8">
+                  <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
                     {/* Recall Panel */}
                     <div className="bg-red-50/50 border border-red-100 rounded-2xl p-6">
                       <h4 className="font-bold text-red-700 mb-4 flex items-center gap-2">
@@ -1166,7 +1168,37 @@ export default function App() {
                         }} className="space-y-4">
                           <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-rose-200 focus:ring-2 focus:ring-rose-500 outline-none bg-white" onChange={e=>setRejectId(e.target.value)} />
                           <input required type="text" placeholder="Reason (e.g. Failed lab test)" className="w-full px-4 py-3 rounded-xl border border-rose-200 focus:ring-2 focus:ring-rose-500 outline-none bg-white" onChange={e=>setRejectReason(e.target.value)} />
-                          <button className="w-full bg-rose-600 hover:bg-rose-700 text-white font-medium py-3 rounded-xl transition-colors">Reject & Deactivate</button>
+                          <button className="w-full bg-rose-600 hover:bg-rose-700 text-white font-medium py-3 rounded-xl transition-colors">Confirm Rejection</button>
+                        </form>
+                    </div>
+
+                    {/* Temperature Breach Panel */}
+                    <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-6">
+                        <h4 className="font-bold text-blue-700 mb-4 flex items-center gap-2">
+                          <Thermometer className="w-5 h-5" /> Reject Batch (Temperature)
+                        </h4>
+                        <form onSubmit={async (e) => {
+                          e.preventDefault();
+                          if(!contract) return;
+                          try {
+                            const tx = await contract.rejectBatch(tempRejectId.toUpperCase().trim(), `Temperature breach: ${tempRejectVal}°C recorded. Cold chain failed.`);
+                            await tx.wait();
+                            alert("Batch Rejected due to Temperature Deviation.");
+                            try {
+                              const total = await contract.batchCount();
+                              const active = await contract.getActiveBatchCount();
+                              setTotalBatchCount(Number(total));
+                              setActiveBatchCountState(Number(active));
+                            } catch {}
+                            setTempRejectId(""); setTempRejectVal("");
+                          } catch (err) { alert("Error rejecting batch. Must be Current Holder."); console.error(err); }
+                        }} className="space-y-4">
+                          <input required type="text" placeholder="Batch ID" value={tempRejectId} onChange={e=>setTempRejectId(e.target.value.toUpperCase().trim())} className="w-full px-4 py-3 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none bg-white" />
+                          <div className="relative">
+                            <input required type="number" step="0.1" placeholder="Recorded Temp (e.g. 12.5)" value={tempRejectVal} onChange={e=>setTempRejectVal(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none bg-white pr-10" />
+                            <span className="absolute right-4 top-3 text-slate-400 font-bold">°C</span>
+                          </div>
+                          <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-xl transition-colors">Discard & Quarantine</button>
                         </form>
                     </div>
                   </div>
