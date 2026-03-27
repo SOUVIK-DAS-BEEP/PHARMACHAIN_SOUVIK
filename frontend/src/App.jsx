@@ -9,7 +9,7 @@ const contractABI = config.abi;
 const WALLET_STORAGE_KEY = "pharmachain.wallet";
 
 const ROLES = { 0: "None", 1: "Manufacturer", 2: "Distributor", 3: "Retailer / Healthcare Provider" };
-const STATUS = { 0: "Manufactured", 1: "In Transit", 2: "Delivered", 3: "Recalled", 4: "Sold", 5: "Lost", 6: "Rejected" };
+const STATUS = { 0: "Manufactured", 1: "In Transit", 2: "Delivered", 3: "Recalled", 4: "Sold", 5: "Lost", 6: "Rejected", 7: "Flagged" };
 
 // ── Wallet detection via EIP-6963 + legacy fallback ────────────────────────
 const getLegacyWalletOptions = () => {
@@ -1228,9 +1228,9 @@ export default function App() {
                           <p className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Internal Record</p>
                           <h4 className="text-4xl font-bold text-white mb-4">{batchInfo.medicineName}</h4>
                           <div className="flex flex-wrap items-center gap-3">
-                            {[3,5,6].includes(Number(batchInfo.status)) ? (
-                              <div className="flex items-center gap-2 text-red-400 font-medium bg-red-400/10 border border-red-400/20 px-4 py-1.5 rounded-full text-sm">
-                                <Ban className="w-4 h-4" /> Deactivated — {STATUS[Number(batchInfo.status)]}
+                            {[3,5,6,7].includes(Number(batchInfo.status)) ? (
+                              <div className={`flex items-center gap-2 font-medium px-4 py-1.5 rounded-full text-sm ${Number(batchInfo.status) === 7 ? 'text-orange-400 bg-orange-400/10 border border-orange-400/20' : 'text-red-400 bg-red-400/10 border border-red-400/20'}`}>
+                                {Number(batchInfo.status) === 7 ? <AlertTriangle className="w-4 h-4" /> : <Ban className="w-4 h-4" />} {Number(batchInfo.status) === 7 ? 'Quarantined — Route Tampered' : `Deactivated — ${STATUS[Number(batchInfo.status)]}`}
                               </div>
                             ) : (
                               <div className="flex items-center gap-2 text-cyan-400 font-medium bg-cyan-400/10 border border-cyan-400/20 px-4 py-1.5 rounded-full text-sm">
@@ -1297,7 +1297,7 @@ export default function App() {
                                 
                                 {(() => {
                                   const evStatus = Number(event.status);
-                                  const isTerminal = evStatus === 3 || evStatus === 5 || evStatus === 6;
+                                  const isTerminal = evStatus === 3 || evStatus === 5 || evStatus === 6 || evStatus === 7;
                                   const isDeviation = event.notes && event.notes.startsWith("ROUTE DEVIATION");
                                   const nodeClass = isTerminal ? 'bg-red-600 shadow-[0_0_20px_rgba(220,38,38,0.6)]' : isDeviation ? 'bg-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.6)]' : 'bg-blue-600 shadow-[0_0_20px_rgba(37,99,235,0.6)]';
                                   return (
@@ -1311,7 +1311,7 @@ export default function App() {
                                   <div className="absolute -top-3 left-[50%] -translate-x-[50%] w-6 h-6 bg-slate-800 border-t border-l border-slate-700 rotate-45 transform"></div>
                                   
                                   <div className="flex justify-between items-start mb-4 relative z-10">
-                                    <span className={`font-bold text-lg ${[3,5,6].includes(Number(event.status)) ? 'text-red-400' : (event.notes && event.notes.startsWith('ROUTE DEVIATION') ? 'text-amber-400' : 'text-blue-400')}`}>{STATUS[Number(event.status)]}{event.notes && event.notes.startsWith('ROUTE DEVIATION') ? ' ⚠️' : ''}</span>
+                                    <span className={`font-bold text-lg ${[3,5,6,7].includes(Number(event.status)) ? (Number(event.status) === 7 ? 'text-orange-400' : 'text-red-400') : (event.notes && event.notes.startsWith('ROUTE DEVIATION') ? 'text-amber-400' : 'text-blue-400')}`}>{STATUS[Number(event.status)]}{Number(event.status) === 7 ? ' 🚨' : (event.notes && event.notes.startsWith('ROUTE DEVIATION') ? ' ⚠️' : '')}</span>
                                     <span className="text-slate-400 text-xs font-medium bg-slate-900 px-3 py-1 rounded-full whitespace-nowrap">{new Date(Number(event.timestamp) * 1000).toLocaleString()}</span>
                                   </div>
                                   
@@ -1378,11 +1378,12 @@ export default function App() {
 
             {batchInfo && (() => {
               const statusNum = Number(batchInfo.status);
-              const isDeactivated = statusNum === 3 || statusNum === 5 || statusNum === 6;
+              const isDeactivated = statusNum === 3 || statusNum === 5 || statusNum === 6 || statusNum === 7;
               const deactivationMessages = {
                 3: { label: "RECALLED", msg: "This batch has been recalled by the manufacturer. Do not use this product.", color: "red" },
                 5: { label: "LOST", msg: "This batch has been reported as lost or destroyed. It is no longer valid in the supply chain.", color: "amber" },
                 6: { label: "REJECTED", msg: "This batch was rejected due to quality failure. This product should not be consumed.", color: "rose" },
+                7: { label: "QUARANTINED — ROUTE TAMPERED", msg: "This batch was automatically quarantined because it was sent to an unauthorized recipient. The supply chain route was violated. This product should not be used until cleared by the manufacturer.", color: "orange" },
               };
               const deactivation = deactivationMessages[statusNum];
               return (
@@ -1391,25 +1392,32 @@ export default function App() {
                   <div className={`mb-8 p-6 rounded-2xl border-2 flex items-start gap-4 ${
                     deactivation.color === "red" ? "bg-red-950/50 border-red-500/50" :
                     deactivation.color === "amber" ? "bg-amber-950/50 border-amber-500/50" :
+                    deactivation.color === "orange" ? "bg-orange-950/50 border-orange-500/50" :
                     "bg-rose-950/50 border-rose-500/50"
                   }`}>
                     <div className={`p-3 rounded-full shrink-0 ${
                       deactivation.color === "red" ? "bg-red-500/20" :
                       deactivation.color === "amber" ? "bg-amber-500/20" :
+                      deactivation.color === "orange" ? "bg-orange-500/20" :
                       "bg-rose-500/20"
                     }`}>
-                      <Ban className={`w-8 h-8 ${
-                        deactivation.color === "red" ? "text-red-400" :
-                        deactivation.color === "amber" ? "text-amber-400" :
-                        "text-rose-400"
-                      }`} />
+                      {deactivation.color === "orange" ? (
+                        <AlertTriangle className="w-8 h-8 text-orange-400" />
+                      ) : (
+                        <Ban className={`w-8 h-8 ${
+                          deactivation.color === "red" ? "text-red-400" :
+                          deactivation.color === "amber" ? "text-amber-400" :
+                          "text-rose-400"
+                        }`} />
+                      )}
                     </div>
                     <div>
                       <h4 className={`text-xl font-bold mb-1 ${
                         deactivation.color === "red" ? "text-red-400" :
                         deactivation.color === "amber" ? "text-amber-400" :
+                        deactivation.color === "orange" ? "text-orange-400" :
                         "text-rose-400"
-                      }`}>⚠️ BATCH {deactivation.label}</h4>
+                      }`}>{deactivation.color === "orange" ? "🚨" : "⚠️"} BATCH {deactivation.label}</h4>
                       <p className="text-slate-300 text-sm">{deactivation.msg}</p>
                       <p className="text-slate-500 text-xs mt-2">This batch has been permanently deactivated and removed from the active supply chain. The data below is preserved as a historical record.</p>
                     </div>
@@ -1421,8 +1429,8 @@ export default function App() {
                     <h4 className="text-4xl font-bold text-white mb-4">{batchInfo.medicineName}</h4>
                     <div className="flex flex-wrap items-center gap-3">
                       {isDeactivated ? (
-                        <div className="flex items-center gap-2 text-red-400 font-medium bg-red-400/10 border border-red-400/20 px-4 py-1.5 rounded-full text-sm">
-                          <Ban className="w-4 h-4" /> Deactivated — {STATUS[statusNum]}
+                        <div className={`flex items-center gap-2 font-medium px-4 py-1.5 rounded-full text-sm ${statusNum === 7 ? 'text-orange-400 bg-orange-400/10 border border-orange-400/20' : 'text-red-400 bg-red-400/10 border border-red-400/20'}`}>
+                          {statusNum === 7 ? <AlertTriangle className="w-4 h-4" /> : <Ban className="w-4 h-4" />} {statusNum === 7 ? 'Quarantined — Route Tampered' : `Deactivated — ${STATUS[statusNum]}`}
                         </div>
                       ) : (
                         <div className="flex items-center gap-2 text-cyan-400 font-medium bg-cyan-400/10 border border-cyan-400/20 px-4 py-1.5 rounded-full text-sm">
@@ -1489,7 +1497,7 @@ export default function App() {
                           
                           {(() => {
                             const evStatus = Number(event.status);
-                            const isTerminal = evStatus === 3 || evStatus === 5 || evStatus === 6;
+                            const isTerminal = evStatus === 3 || evStatus === 5 || evStatus === 6 || evStatus === 7;
                             const isDeviation = event.notes && event.notes.startsWith("ROUTE DEVIATION");
                             const nodeClass = isTerminal ? 'bg-red-600 shadow-[0_0_20px_rgba(220,38,38,0.6)]' : isDeviation ? 'bg-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.6)]' : 'bg-blue-600 shadow-[0_0_20px_rgba(37,99,235,0.6)]';
                             return (
@@ -1503,7 +1511,7 @@ export default function App() {
                             <div className="absolute -top-3 left-[50%] -translate-x-[50%] w-6 h-6 bg-slate-800 border-t border-l border-slate-700 rotate-45 transform"></div>
                             
                             <div className="flex justify-between items-start mb-4 relative z-10">
-                              <span className={`font-bold text-lg ${[3,5,6].includes(Number(event.status)) ? 'text-red-400' : (event.notes && event.notes.startsWith('ROUTE DEVIATION') ? 'text-amber-400' : 'text-blue-400')}`}>{STATUS[Number(event.status)]}{event.notes && event.notes.startsWith('ROUTE DEVIATION') ? ' ⚠️' : ''}</span>
+                              <span className={`font-bold text-lg ${[3,5,6,7].includes(Number(event.status)) ? (Number(event.status) === 7 ? 'text-orange-400' : 'text-red-400') : (event.notes && event.notes.startsWith('ROUTE DEVIATION') ? 'text-amber-400' : 'text-blue-400')}`}>{STATUS[Number(event.status)]}{Number(event.status) === 7 ? ' 🚨' : (event.notes && event.notes.startsWith('ROUTE DEVIATION') ? ' ⚠️' : '')}</span>
                               <span className="text-slate-400 text-xs font-medium bg-slate-900 px-3 py-1 rounded-full whitespace-nowrap">{new Date(Number(event.timestamp) * 1000).toLocaleString()}</span>
                             </div>
                             

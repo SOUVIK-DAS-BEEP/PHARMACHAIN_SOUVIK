@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 contract PharmaTracking {
     enum Role { None, Manufacturer, Distributor, Retailer }
-    enum Status { Manufactured, InTransit, Delivered, Recalled, Sold, Lost, Rejected }
+    enum Status { Manufactured, InTransit, Delivered, Recalled, Sold, Lost, Rejected, Flagged }
 
     struct Batch {
         string batchId;
@@ -47,6 +47,7 @@ contract PharmaTracking {
     event BatchLost(string batchId, address indexed reportedBy, string reason);
     event BatchDeactivated(string batchId, Status terminalStatus, address indexed deactivatedBy, string reason);
     event RouteDeviation(string batchId, address expected, address actual, address indexed sender);
+    event BatchFlagged(string batchId, address indexed flaggedBy, string reason);
     event FraudAlert(string batchId, uint256 scanCount, address scanner);
 
     // ── Modifiers ──────────────────────────────────────────────────────
@@ -127,6 +128,7 @@ contract PharmaTracking {
         require(batches[_batchId].status != Status.Recalled, "Batch has been recalled");
         require(batches[_batchId].status != Status.Lost, "Batch reported as lost");
         require(batches[_batchId].status != Status.Rejected, "Batch has been rejected");
+        require(batches[_batchId].status != Status.Flagged, "Batch has been flagged for route deviation");
 
         address previousOwner = batches[_batchId].currentOwner;
 
@@ -160,17 +162,9 @@ contract PharmaTracking {
             }
         }
 
-        if (deviated) {
-            deviationCount[msg.sender]++;
-            address expected = users[_to] == Role.Distributor
-                ? batches[_batchId].expectedDistributor
-                : batches[_batchId].expectedRetailer;
-            emit RouteDeviation(_batchId, expected, _to, msg.sender);
-        }
-
         totalTransfersHandled[msg.sender]++;
-        // ── End Route Compliance ────────────────────────────────────
 
+        // Record the transfer first (so history shows where it went)
         batches[_batchId].currentOwner = _to;
         batches[_batchId].status = _newStatus;
         batches[_batchId].location = _location;
@@ -185,6 +179,38 @@ contract PharmaTracking {
         }));
 
         emit BatchTransferred(_batchId, previousOwner, _to, _newStatus);
+
+        // ── Auto-Quarantine on Deviation ─────────────────────────────
+        // Transfer is recorded above, now immediately freeze the batch
+        if (deviated) {
+            deviationCount[msg.sender]++;
+            address expected = users[_to] == Role.Distributor
+                ? batches[_batchId].expectedDistributor
+                : batches[_batchId].expectedRetailer;
+            emit RouteDeviation(_batchId, expected, _to, msg.sender);
+
+            // Auto-deactivate: mark as Flagged, no further transfers possible
+            batches[_batchId].status = Status.Flagged;
+            activeBatchCount--;
+
+            string memory flagNote = string(abi.encodePacked(
+                "AUTO-QUARANTINED: Batch frozen due to route deviation. ",
+                transferNotes
+            ));
+
+            batchHistory[_batchId].push(HistoryItem({
+                from: _to,
+                to: _to,
+                timestamp: block.timestamp,
+                status: Status.Flagged,
+                location: _location,
+                notes: flagNote
+            }));
+
+            emit BatchFlagged(_batchId, msg.sender, flagNote);
+            emit BatchDeactivated(_batchId, Status.Flagged, msg.sender, flagNote);
+        }
+        // ── End Route Compliance ────────────────────────────────────
     }
 
     // ── Helper: address to hex string (for deviation notes) ───────────
@@ -290,7 +316,7 @@ contract PharmaTracking {
     function isBatchActive(string memory _batchId) public view returns (bool) {
         if (!batches[_batchId].exists) return false;
         Status s = batches[_batchId].status;
-        return (s != Status.Recalled && s != Status.Lost && s != Status.Rejected);
+        return (s != Status.Recalled && s != Status.Lost && s != Status.Rejected && s != Status.Flagged);
     }
 
     function getActiveBatchCount() public view returns (uint256) {
