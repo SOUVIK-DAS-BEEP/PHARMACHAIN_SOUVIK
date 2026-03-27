@@ -1,6 +1,6 @@
 import { useState, useEffect, useEffectEvent, useRef } from "react";
 import { ethers } from "ethers";
-import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert } from "lucide-react";
+import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert, Bell, Ban, Info, Clock } from "lucide-react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import config from "./config.json";
 
@@ -10,6 +10,12 @@ const WALLET_STORAGE_KEY = "pharmachain.wallet";
 
 const ROLES = { 0: "None", 1: "Manufacturer", 2: "Distributor", 3: "Retailer / Healthcare Provider" };
 const STATUS = { 0: "Manufactured", 1: "In Transit", 2: "Delivered", 3: "Recalled", 4: "Sold", 5: "Lost", 6: "Rejected" };
+const SEVERITY = { 0: "Info", 1: "Warning", 2: "Critical" };
+const SEVERITY_COLORS = {
+  0: { bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-700", icon: "text-blue-500", badge: "bg-blue-500" },
+  1: { bg: "bg-amber-50", border: "border-amber-200", text: "text-amber-700", icon: "text-amber-500", badge: "bg-amber-500" },
+  2: { bg: "bg-red-50", border: "border-red-200", text: "text-red-700", icon: "text-red-500", badge: "bg-red-500" },
+};
 
 // ── Wallet detection via EIP-6963 + legacy fallback ────────────────────────
 const getLegacyWalletOptions = () => {
@@ -55,7 +61,7 @@ const QRScannerPlugin = ({ onScanSuccess, onScanFailure }) => {
 
 export default function App() {
   const [view, setView] = useState("landing");
-  const [, setProvider] = useState(null);
+  const [provider, setProvider] = useState(null);
   const [account, setAccount] = useState("");
   const [contract, setContract] = useState(null);
   const [role, setRole] = useState(0);
@@ -85,6 +91,8 @@ export default function App() {
   const [recallReason, setRecallReason] = useState("");
   const [lostId, setLostId] = useState("");
   const [lostReason, setLostReason] = useState("");
+  const [rejectId, setRejectId] = useState("");
+  const [rejectReason, setRejectReason] = useState("");
   const [isOwner, setIsOwner] = useState(false);
   const [passAuth, setPassAuth] = useState(false);
   const [passKey, setPassKey] = useState("");
@@ -96,6 +104,13 @@ export default function App() {
   const [showScanner, setShowScanner] = useState(false);
   const [scanTarget, setScanTarget] = useState(""); // "verify" or "transfer"
   const [showWalletPicker, setShowWalletPicker] = useState(false);
+
+  // ── Notification State ──────────────────────────────────────────────
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const notifPollRef = useRef(null);
+  const notifPanelRef = useRef(null);
 
   // EIP-6963: modern wallet discovery (MetaMask, Coinbase, etc.)
   const [eip6963Wallets, setEip6963Wallets] = useState([]);
@@ -251,6 +266,41 @@ export default function App() {
 
       const provider = new ethers.BrowserProvider(injectedProvider);
       const network = await provider.getNetwork();
+      
+      // Auto-switch network to Hardhat Localhost (Chain ID 31337 / 0x7a69)
+      if (Number(network.chainId) !== 31337) {
+        try {
+          await injectedProvider.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: '0x7a69' }], // 31337 in hex
+          });
+        } catch (switchError) {
+          // This error code indicates that the chain has not been added to MetaMask.
+          if (switchError.code === 4902) {
+            try {
+              await injectedProvider.request({
+                method: 'wallet_addEthereumChain',
+                params: [
+                  {
+                    chainId: '0x7a69',
+                    chainName: 'Hardhat Localhost',
+                    rpcUrls: ['http://127.0.0.1:8545'],
+                    nativeCurrency: {
+                      name: 'Ethereum',
+                      symbol: 'ETH',
+                      decimals: 18,
+                    },
+                  },
+                ],
+              });
+            } catch (addError) {
+              console.error("Failed to add network:", addError);
+            }
+          } else {
+             console.error("Failed to switch network:", switchError);
+          }
+        }
+      }
 
       const signer = await provider.getSigner(accounts[0]);
       const addr = await signer.getAddress();
@@ -338,8 +388,26 @@ export default function App() {
     }
   };
 
+  const ensureLocalNetwork = async () => {
+    if (!provider) {
+      console.warn("ensureLocalNetwork: provider is null, skipping network check.");
+      return true; // Allow transactions via contract signer even if provider ref isn't stored
+    }
+    try {
+      const net = await provider.getNetwork();
+      if (Number(net.chainId) !== 31337) {
+        alert("⚠️ Wrong Network Detected!\n\nYour MetaMask is currently connected to " + (net.name || "another network") + " instead of Localhost.\n\nPlease open the MetaMask extension, click the network dropdown at the top, and explicitly select 'Localhost 8545' before trying to send a transaction.");
+        return false;
+      }
+    } catch (err) {
+      console.warn("ensureLocalNetwork: could not check network, proceeding anyway.", err);
+    }
+    return true;
+  };
+
   const registerRole = async (selectedRole) => {
     if (!contract || !account) return alert("Please connect wallet first");
+    if (!(await ensureLocalNetwork())) return;
     try {
       const tx = await contract.registerUser(account, selectedRole);
       await tx.wait();
@@ -354,12 +422,14 @@ export default function App() {
   const createBatch = async (e) => {
     e.preventDefault();
     if (!contract) return;
+    if (!(await ensureLocalNetwork())) return;
     try {
       const newId = "BCH-" + crypto.getRandomValues(new Uint32Array(1))[0].toString(16).toUpperCase().padStart(8, '0');
       const tx = await contract.createBatch(newId, batchName, expiry, location);
       await tx.wait();
       
       setMintedBatchId(newId);
+      fetchNotifications();
       
       setBatchName(""); setExpiry(""); setLocation("");
     } catch (err) {
@@ -371,11 +441,13 @@ export default function App() {
   const transferBatch = async (e) => {
     e.preventDefault();
     if (!contract) return;
+    if (!(await ensureLocalNetwork())) return;
     try {
       const cleanId = transferId.toUpperCase().trim();
       const tx = await contract.transferOwnership(cleanId, transferTo, transferStatus, transferLoc);
       await tx.wait();
       alert("Batch Transfer Recorded Immaculately!");
+      fetchNotifications();
       setTransferId(""); setTransferTo(""); setTransferLoc("");
     } catch (err) {
       console.error(err);
@@ -387,11 +459,13 @@ export default function App() {
   const transferBatchRet = async (e) => {
     e.preventDefault();
     if (!contract) return;
+    if (!(await ensureLocalNetwork())) return;
     try {
       const cleanId = retTransferId.toUpperCase().trim();
       const tx = await contract.transferOwnership(cleanId, retTransferTo, retTransferStatus, retTransferLoc);
       await tx.wait();
       alert("Batch Transfer Recorded Immaculately!");
+      fetchNotifications();
       setRetTransferId(""); setRetTransferTo(""); setRetTransferLoc("");
     } catch (err) {
       console.error(err);
@@ -403,11 +477,23 @@ export default function App() {
   const verifyBatchId = async (idToVerify) => {
     if (!idToVerify) return;
     
-    // Fallback to a read-only provider if wallet isn't connected (for Customers)
-    let readContract = contract;
-    if (!readContract) {
-      const readProvider = new ethers.JsonRpcProvider("https://ethereum-sepolia-rpc.publicnode.com");
+    // Always use a hardcoded local connection for verification reads,
+    // so that even if the MetaMask wallet is mistakenly on Sepolia,
+    // reading data won't throw a generic "could not decode result data" (0x collision) error.
+    let readContract;
+    try {
+      const localRpc = "http://127.0.0.1:8545";
+      const readProvider = new ethers.JsonRpcProvider(localRpc);
       readContract = new ethers.Contract(contractAddress, contractABI, readProvider);
+      
+      const code = await readProvider.getCode(contractAddress);
+      if (code === "0x" || code === "0x0") {
+        throw new Error(`Contract not found on local blockchain at ${contractAddress}. Have you run the hardhat deploy script?`);
+      }
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "Failed to establish connection to the blockchain.");
+      return;
     }
 
     try {
@@ -417,8 +503,8 @@ export default function App() {
       setBatchInfo(data);
       setBatchHistory(history);
     } catch (err) {
-      console.error(err);
-      alert("Batch not found on Blockchain.");
+      console.error("Verification failed:", err);
+      alert(`Batch ${idToVerify} not found on the active local blockchain.`);
       setBatchInfo(null);
     }
   };
@@ -453,6 +539,91 @@ export default function App() {
     } else {
       alert("Invalid organization access key.");
     }
+  };
+
+  // ── Notification Functions ────────────────────────────────────────────
+  const fetchNotifications = async () => {
+    if (!contract) return;
+    try {
+      const notifs = await contract.getMyNotifications();
+      const parsed = notifs.map(n => ({
+        id: Number(n.id),
+        batchId: n.batchId,
+        message: n.message,
+        triggeredBy: n.triggeredBy,
+        timestamp: Number(n.timestamp),
+        severity: Number(n.severity),
+        read: n.read,
+      }));
+      // Sort newest first
+      parsed.sort((a, b) => b.timestamp - a.timestamp);
+      setNotifications(parsed);
+      setUnreadCount(parsed.filter(n => !n.read).length);
+    } catch (err) {
+      console.warn("Could not fetch notifications:", err);
+    }
+  };
+
+  const markSingleRead = async (notifId) => {
+    if (!contract) return;
+    try {
+      const tx = await contract.markNotificationRead(notifId);
+      await tx.wait();
+      fetchNotifications();
+    } catch (err) {
+      console.error("Failed to mark notification read:", err);
+    }
+  };
+
+  const markAllNotifRead = async () => {
+    if (!contract) return;
+    try {
+      const tx = await contract.markAllRead();
+      await tx.wait();
+      fetchNotifications();
+    } catch (err) {
+      console.error("Failed to mark all read:", err);
+    }
+  };
+
+  // Poll notifications every 5 seconds when connected
+  useEffect(() => {
+    if (contract && account) {
+      fetchNotifications();
+      notifPollRef.current = setInterval(fetchNotifications, 5000);
+    }
+    return () => {
+      if (notifPollRef.current) clearInterval(notifPollRef.current);
+    };
+  }, [contract, account]);
+
+  // Close notification panel on click outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (notifPanelRef.current && !notifPanelRef.current.contains(e.target)) {
+        setShowNotifications(false);
+      }
+    };
+    if (showNotifications) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showNotifications]);
+
+  const getSeverityIcon = (severity) => {
+    switch (severity) {
+      case 2: return <AlertTriangle className="w-5 h-5" />;
+      case 1: return <ShieldAlert className="w-5 h-5" />;
+      default: return <Info className="w-5 h-5" />;
+    }
+  };
+
+  const timeAgo = (timestamp) => {
+    const seconds = Math.floor(Date.now() / 1000 - timestamp);
+    if (seconds < 60) return "Just now";
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return new Date(timestamp * 1000).toLocaleDateString();
   };
 
   // Landing view
@@ -599,20 +770,144 @@ export default function App() {
           </button>
           <div className="flex items-center gap-2">
             <ShieldCheck className="text-blue-600 w-8 h-8" />
-            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-cyan-500">
-              PharmaChain {view === "industry" ? "Portal" : "Verify"}
-            </h1>
+            <div className="flex flex-col">
+              <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-cyan-500 leading-none">
+                PharmaChain {view === "industry" ? "Portal" : "Verify"}
+              </h1>
+              <div className="flex items-center gap-2 mt-1">
+                <span className={`w-2 h-2 rounded-full ${account ? 'bg-emerald-500' : 'bg-slate-300'} animate-pulse`}></span>
+                <span className="text-[10px] uppercase font-bold tracking-widest text-slate-400">
+                  {account ? `Connected: ${walletName}` : "Not Connected"}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
         {view === "industry" && (
           <div className="flex items-center gap-3">
             {account && (
-              <button
-                onClick={signOut}
-                className="border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-full font-medium transition-all"
-              >
-                Sign Out
-              </button>
+              <>
+                {/* ── Notification Bell ───────────────────────── */}
+                <div className="relative" ref={notifPanelRef}>
+                  <button
+                    onClick={() => setShowNotifications(!showNotifications)}
+                    className="relative p-2.5 rounded-full border border-slate-200 hover:border-blue-400 bg-white hover:bg-blue-50 transition-all group"
+                    title="Notifications"
+                  >
+                    <Bell className="w-5 h-5 text-slate-600 group-hover:text-blue-600 transition-colors" />
+                    {unreadCount > 0 && (
+                      <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center animate-bounce shadow-lg shadow-red-500/40">
+                        {unreadCount > 9 ? "9+" : unreadCount}
+                      </span>
+                    )}
+                  </button>
+
+                  {/* ── Notification Dropdown Panel ────────────── */}
+                  {showNotifications && (
+                    <div className="absolute right-0 top-14 w-[420px] max-h-[70vh] bg-white rounded-2xl shadow-2xl border border-slate-200 z-[200] overflow-hidden flex flex-col animate-in">
+                      {/* Header */}
+                      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
+                        <div className="flex items-center gap-2">
+                          <Bell className="w-5 h-5 text-blue-600" />
+                          <h3 className="text-lg font-bold text-slate-800">Notifications</h3>
+                          {unreadCount > 0 && (
+                            <span className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                              {unreadCount} new
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {unreadCount > 0 && (
+                            <button
+                              onClick={markAllNotifRead}
+                              className="text-xs text-blue-600 hover:text-blue-800 font-semibold hover:underline transition-colors"
+                            >
+                              Mark all read
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setShowNotifications(false)}
+                            className="text-slate-400 hover:text-slate-700 p-1 rounded-full hover:bg-slate-100 transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Notification List */}
+                      <div className="overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-slate-200">
+                        {notifications.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
+                            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+                              <Bell className="w-8 h-8 text-slate-300" />
+                            </div>
+                            <p className="text-slate-500 font-medium">No notifications yet</p>
+                            <p className="text-slate-400 text-sm mt-1">Supply chain alerts will appear here when batches are flagged, lost, recalled, or rejected.</p>
+                          </div>
+                        ) : (
+                          notifications.map((notif) => {
+                            const colors = SEVERITY_COLORS[notif.severity] || SEVERITY_COLORS[0];
+                            return (
+                              <div
+                                key={notif.id}
+                                className={`px-5 py-4 border-b border-slate-100 hover:bg-slate-50/80 transition-colors cursor-pointer ${!notif.read ? 'bg-blue-50/30 border-l-4 border-l-blue-500' : 'border-l-4 border-l-transparent'}`}
+                                onClick={() => { if (!notif.read) markSingleRead(notif.id); }}
+                              >
+                                <div className="flex items-start gap-3">
+                                  {/* Severity Icon */}
+                                  <div className={`flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${colors.bg} ${colors.icon} mt-0.5`}>
+                                    {getSeverityIcon(notif.severity)}
+                                  </div>
+
+                                  {/* Content */}
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center justify-between gap-2 mb-1">
+                                      <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${colors.bg} ${colors.text} ${colors.border} border`}>
+                                        {SEVERITY[notif.severity]}
+                                      </span>
+                                      <div className="flex items-center gap-1 text-slate-400 shrink-0">
+                                        <Clock className="w-3 h-3" />
+                                        <span className="text-[10px] font-medium">{timeAgo(notif.timestamp)}</span>
+                                      </div>
+                                    </div>
+                                    <p className={`text-sm leading-snug ${notif.read ? 'text-slate-500' : 'text-slate-800 font-medium'}`}>
+                                      {notif.message}
+                                    </p>
+                                    <div className="flex items-center gap-3 mt-2">
+                                      <span className="text-[10px] text-slate-400 font-mono bg-slate-100 px-2 py-0.5 rounded">
+                                        {notif.batchId}
+                                      </span>
+                                      {!notif.read && (
+                                        <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      {/* Footer */}
+                      {notifications.length > 0 && (
+                        <div className="px-6 py-3 border-t border-slate-100 bg-slate-50/50 text-center">
+                          <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">
+                            {notifications.length} notification{notifications.length !== 1 ? 's' : ''} · Stored on-chain
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={signOut}
+                  className="border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-full font-medium transition-all"
+                >
+                  Sign Out
+                </button>
+              </>
             )}
             <button
               onClick={account ? undefined : openWalletPicker}
@@ -869,7 +1164,7 @@ export default function App() {
                   <h3 className="text-xl font-bold flex items-center gap-2 mb-6 text-slate-800">
                     <ShieldCheck className="w-6 h-6 text-red-500" /> Security & Exception Handling
                   </h3>
-                  <div className="grid md:grid-cols-2 gap-8">
+                  <div className="grid md:grid-cols-3 gap-8">
                     {/* Recall Panel */}
                     <div className="bg-red-50/50 border border-red-100 rounded-2xl p-6">
                       <h4 className="font-bold text-red-700 mb-4 flex items-center gap-2">
@@ -878,10 +1173,12 @@ export default function App() {
                       <form onSubmit={async (e) => {
                         e.preventDefault();
                         if(!contract) return;
+                        if (!(await ensureLocalNetwork())) return;
                         try {
                           const tx = await contract.recallBatch(recallId.toUpperCase().trim(), recallReason);
                           await tx.wait();
-                          alert("Batch Recalled successfully.");
+                          alert("Batch Recalled successfully. All stakeholders have been notified.");
+                          fetchNotifications();
                         } catch (err) { alert("Error recalling batch. Make sure you are the Origin Manufacturer."); console.error(err); }
                       }} className="space-y-4">
                         <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-red-200 focus:ring-2 focus:ring-red-500 outline-none bg-white" onChange={e=>setRecallId(e.target.value)} />
@@ -898,15 +1195,44 @@ export default function App() {
                         <form onSubmit={async (e) => {
                           e.preventDefault();
                           if(!contract) return;
+                          if (!(await ensureLocalNetwork())) return;
                           try {
                             const tx = await contract.reportLost(lostId.toUpperCase().trim(), lostReason);
                             await tx.wait();
-                            alert("Batch status permanently updated to Lost/Destroyed.");
+                            alert("Batch status permanently updated to Lost/Destroyed. All previous holders notified.");
+                            fetchNotifications();
                           } catch (err) { alert("Error reporting batch. Must be Current Holder."); console.error(err); }
                         }} className="space-y-4">
                           <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white" onChange={e=>setLostId(e.target.value)} />
                           <input required type="text" placeholder="Reason (e.g. Temperature breach)" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white" onChange={e=>setLostReason(e.target.value)} />
                           <button className="w-full bg-orange-600 hover:bg-orange-700 text-white font-medium py-3 rounded-xl transition-colors">Confirm Incident Details</button>
+                        </form>
+                    </div>
+
+                    {/* Reject Batch Panel */}
+                    <div className="bg-violet-50/50 border border-violet-100 rounded-2xl p-6">
+                        <h4 className="font-bold text-violet-700 mb-4 flex items-center gap-2">
+                          <Ban className="w-5 h-5" /> Reject Incoming Batch
+                        </h4>
+                        <form onSubmit={async (e) => {
+                          e.preventDefault();
+                          if(!contract) return;
+                          if (!(await ensureLocalNetwork())) return;
+                          try {
+                            const tx = await contract.rejectBatch(rejectId.toUpperCase().trim(), rejectReason);
+                            await tx.wait();
+                            alert("Batch rejected. Manufacturer and all previous holders have been notified.");
+                            fetchNotifications();
+                            setRejectId(""); setRejectReason("");
+                          } catch (err) { 
+                            const reason = err.reason || err.message || "Must be the current holder to reject.";
+                            alert("Error rejecting batch: " + reason); 
+                            console.error(err); 
+                          }
+                        }} className="space-y-4">
+                          <input required type="text" value={rejectId} placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-violet-200 focus:ring-2 focus:ring-violet-500 outline-none bg-white" onChange={e=>setRejectId(e.target.value)} />
+                          <input required type="text" value={rejectReason} placeholder="Reason (e.g. Damaged packaging)" className="w-full px-4 py-3 rounded-xl border border-violet-200 focus:ring-2 focus:ring-violet-500 outline-none bg-white" onChange={e=>setRejectReason(e.target.value)} />
+                          <button className="w-full bg-violet-600 hover:bg-violet-700 text-white font-medium py-3 rounded-xl transition-colors">Reject & Notify Chain</button>
                         </form>
                     </div>
                   </div>
