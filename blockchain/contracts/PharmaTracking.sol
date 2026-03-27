@@ -4,8 +4,6 @@ pragma solidity ^0.8.20;
 contract PharmaTracking {
     enum Role { None, Manufacturer, Distributor, Retailer }
     enum Status { Manufactured, InTransit, Delivered, Recalled, Sold, Lost, Rejected }
-
-    // ── Notification severity levels ──────────────────────────────────
     enum Severity { Info, Warning, Critical }
 
     struct Batch {
@@ -29,7 +27,6 @@ contract PharmaTracking {
         string notes;
     }
 
-    // ── On-chain Notification ─────────────────────────────────────────
     struct Notification {
         uint256 id;
         string batchId;
@@ -40,16 +37,23 @@ contract PharmaTracking {
         bool read;
     }
 
+    struct ScanRecord {
+        uint256 totalScans;
+        uint256 lastScanTime;
+        bool flagged;
+    }
+
     address public owner;
     uint256 public batchCount;
     uint256 private _nextNotificationId;
+    uint256 public constant SCAN_THRESHOLD = 10;
 
     mapping(address => Role) public users;
     mapping(string => Batch) public batches;
     mapping(string => HistoryItem[]) public batchHistory;
-
-    // ── Notifications per address ─────────────────────────────────────
     mapping(address => Notification[]) private userNotifications;
+    mapping(string => ScanRecord) public scanRecords;
+    mapping(string => uint256) public fakeQrAttempts;
 
     event UserRegistered(address indexed user, Role role);
     event BatchCreated(string batchId, string medicineName, address indexed manufacturer);
@@ -59,278 +63,199 @@ contract PharmaTracking {
     event BatchSold(string batchId, address indexed soldBy);
     event BatchLost(string batchId, address indexed reportedBy, string reason);
     event FraudAlert(string batchId, uint256 scanCount, address scanner);
-
-    // ── New notification event ────────────────────────────────────────
+    event FakeQrScanned(string attemptedBatchId, address scanner, uint256 timestamp);
     event NotificationCreated(address indexed recipient, uint256 notificationId, string batchId, string message, Severity severity);
 
-    // ── Modifiers ──────────────────────────────────────────────────────
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only contract owner");
-        _;
-    }
+    modifier onlyOwner() { require(msg.sender == owner, "Only owner"); _; }
+    modifier onlyRole(Role _role) { require(users[msg.sender] == _role, "Unauthorized"); _; }
 
-    modifier onlyRole(Role _role) {
-        require(users[msg.sender] == _role, "Unauthorized role");
-        _;
-    }
-
-    // ── Constructor ────────────────────────────────────────────────────
     constructor() {
         owner = msg.sender;
         users[msg.sender] = Role.Manufacturer;
-        // Pre-register Hardhat Accounts 1 & 2 for instant Demo
         users[address(0x70997970C51812dc3A010C7d01b50e0d17dc79C8)] = Role.Distributor;
         users[address(0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC)] = Role.Retailer;
-        
         emit UserRegistered(msg.sender, Role.Manufacturer);
         emit UserRegistered(address(0x70997970C51812dc3A010C7d01b50e0d17dc79C8), Role.Distributor);
         emit UserRegistered(address(0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC), Role.Retailer);
     }
 
-    // ── Internal: Push notification to a user ─────────────────────────
-    function _pushNotification(address _to, string memory _batchId, string memory _message, Severity _severity) internal {
+    function _notify(address _to, string memory _batchId, string memory _msg, Severity _sev) internal {
         uint256 nId = _nextNotificationId++;
-        userNotifications[_to].push(Notification({
-            id: nId,
-            batchId: _batchId,
-            message: _message,
-            triggeredBy: msg.sender,
-            timestamp: block.timestamp,
-            severity: _severity,
-            read: false
-        }));
-        emit NotificationCreated(_to, nId, _batchId, _message, _severity);
+        userNotifications[_to].push(Notification(nId, _batchId, _msg, msg.sender, block.timestamp, _sev, false));
+        emit NotificationCreated(_to, nId, _batchId, _msg, _sev);
     }
 
-    // ── Admin: Register Users (Public for Demo) ────────────────────────
+    function _notifyChain(string memory _batchId, address _skipA, address _skipB, string memory _msg, Severity _sev) internal {
+        HistoryItem[] storage h = batchHistory[_batchId];
+        for (uint i = 0; i < h.length; i++) {
+            address a = h[i].to;
+            if (a != address(0) && a != _skipA && a != _skipB) {
+                _notify(a, _batchId, _msg, _sev);
+            }
+        }
+    }
+
     function registerUser(address _user, Role _role) public {
         require(_role != Role.None, "Invalid role");
         users[_user] = _role;
         emit UserRegistered(_user, _role);
     }
 
-    // ── Manufacturer: Create Batch ─────────────────────────────────────
-    function createBatch(string memory _batchId, string memory _medicineName, string memory _expiryDate, string memory _location) public onlyRole(Role.Manufacturer) {
-        require(!batches[_batchId].exists, "Batch ID already exists");
+    function createBatch(string memory _batchId, string memory _name, string memory _expiry, string memory _loc) public onlyRole(Role.Manufacturer) {
+        require(!batches[_batchId].exists, "Exists");
         batchCount++;
-        batches[_batchId] = Batch({
-            batchId: _batchId,
-            medicineName: _medicineName,
-            timestamp: block.timestamp,
-            expiryDate: _expiryDate,
-            location: _location,
-            manufacturer: msg.sender,
-            currentOwner: msg.sender,
-            status: Status.Manufactured,
-            exists: true
-        });
-
-        batchHistory[_batchId].push(HistoryItem({
-            from: address(0),
-            to: msg.sender,
-            timestamp: block.timestamp,
-            status: Status.Manufactured,
-            location: _location,
-            notes: ""
-        }));
-
-        emit BatchCreated(_batchId, _medicineName, msg.sender);
+        batches[_batchId] = Batch(_batchId, _name, block.timestamp, _expiry, _loc, msg.sender, msg.sender, Status.Manufactured, true);
+        batchHistory[_batchId].push(HistoryItem(address(0), msg.sender, block.timestamp, Status.Manufactured, _loc, ""));
+        emit BatchCreated(_batchId, _name, msg.sender);
     }
 
-    // ── Transfer Ownership ─────────────────────────────────────────────
-    function transferOwnership(string memory _batchId, address _to, Status _newStatus, string memory _location) public {
-        require(batches[_batchId].exists, "Batch does not exist");
-        require(users[_to] != Role.None, "Receiver must have a registered role");
-        require(batches[_batchId].status != Status.Recalled, "Batch has been recalled");
-        require(batches[_batchId].status != Status.Lost, "Batch reported as lost");
+    function transferOwnership(string memory _batchId, address _to, Status _newStatus, string memory _loc) public {
+        Batch storage b = batches[_batchId];
+        require(b.exists, "Not found");
+        require(users[_to] != Role.None, "Unknown receiver");
+        require(b.status != Status.Recalled && b.status != Status.Lost, "Blocked");
 
-        address previousOwner = batches[_batchId].currentOwner;
+        address prev = b.currentOwner;
+        b.currentOwner = _to;
+        b.status = _newStatus;
+        b.location = _loc;
 
-        batches[_batchId].currentOwner = _to;
-        batches[_batchId].status = _newStatus;
-        batches[_batchId].location = _location;
+        batchHistory[_batchId].push(HistoryItem(prev, _to, block.timestamp, _newStatus, _loc, ""));
 
-        batchHistory[_batchId].push(HistoryItem({
-            from: previousOwner,
-            to: _to,
-            timestamp: block.timestamp,
-            status: _newStatus,
-            location: _location,
-            notes: ""
-        }));
+        string memory m1 = string(abi.encodePacked("Batch ", _batchId, " (", b.medicineName, ") transferred to you"));
+        _notify(_to, _batchId, m1, Severity.Info);
+        string memory m2 = string(abi.encodePacked("Batch ", _batchId, " sent successfully"));
+        _notify(prev, _batchId, m2, Severity.Info);
 
-        // ── Notify the receiver about incoming batch ──────────────────
-        string memory transferMsg = string(abi.encodePacked(
-            "Batch ", _batchId, " (",  batches[_batchId].medicineName, ") transferred to you. Status: ",
-            _newStatus == Status.InTransit ? "In Transit" : "Delivered"
-        ));
-        _pushNotification(_to, _batchId, transferMsg, Severity.Info);
-
-        // ── Notify the previous owner that their batch moved ──────────
-        string memory senderMsg = string(abi.encodePacked(
-            "Batch ", _batchId, " successfully sent to ", _newStatus == Status.InTransit ? "transit" : "delivery"
-        ));
-        _pushNotification(previousOwner, _batchId, senderMsg, Severity.Info);
-
-        emit BatchTransferred(_batchId, previousOwner, _to, _newStatus);
+        emit BatchTransferred(_batchId, prev, _to, _newStatus);
     }
 
-    // ── Recall Batch ───────────────────────────────────────────────────
     function recallBatch(string memory _batchId, string memory _reason) public {
-        require(batches[_batchId].exists, "Batch does not exist");
-        require(batches[_batchId].manufacturer == msg.sender || msg.sender == owner, "Only manufacturer or owner can recall");
-        
-        batches[_batchId].status = Status.Recalled;
+        Batch storage b = batches[_batchId];
+        require(b.exists, "Not found");
+        require(b.manufacturer == msg.sender || msg.sender == owner, "Not authorized");
+        b.status = Status.Recalled;
+        batchHistory[_batchId].push(HistoryItem(b.currentOwner, b.currentOwner, block.timestamp, Status.Recalled, b.location, _reason));
 
-        batchHistory[_batchId].push(HistoryItem({
-            from: batches[_batchId].currentOwner,
-            to: batches[_batchId].currentOwner,
-            timestamp: block.timestamp,
-            status: Status.Recalled,
-            location: batches[_batchId].location,
-            notes: _reason
-        }));
-
-        // ── Notify the current holder that the batch was recalled ─────
-        address currentHolder = batches[_batchId].currentOwner;
-        string memory recallMsg = string(abi.encodePacked(
-            "RECALL ALERT: Batch ", _batchId, " (", batches[_batchId].medicineName, ") has been recalled. Reason: ", _reason
-        ));
-        _pushNotification(currentHolder, _batchId, recallMsg, Severity.Critical);
-
-        // ── Also notify the manufacturer if they are not the current holder
-        if (currentHolder != batches[_batchId].manufacturer) {
-            _pushNotification(batches[_batchId].manufacturer, _batchId, recallMsg, Severity.Critical);
-        }
+        string memory m = string(abi.encodePacked("RECALL: Batch ", _batchId, " recalled. Reason: ", _reason));
+        _notify(b.currentOwner, _batchId, m, Severity.Critical);
+        if (b.currentOwner != b.manufacturer) _notify(b.manufacturer, _batchId, m, Severity.Critical);
 
         emit BatchRecalled(_batchId, msg.sender, _reason);
     }
 
-    // ── Report Lost/Damaged ────────────────────────────────────────────
     function reportLost(string memory _batchId, string memory _reason) public {
-        require(batches[_batchId].exists, "Batch does not exist");
-        require(batches[_batchId].currentOwner == msg.sender || msg.sender == owner, "Only current owner or admin can report lost");
+        Batch storage b = batches[_batchId];
+        require(b.exists, "Not found");
+        require(b.currentOwner == msg.sender || msg.sender == owner, "Not authorized");
 
-        address previousOwner = batches[_batchId].currentOwner;
-        address manufacturer = batches[_batchId].manufacturer;
+        address prev = b.currentOwner;
+        b.status = Status.Lost;
+        batchHistory[_batchId].push(HistoryItem(prev, address(0), block.timestamp, Status.Lost, b.location, _reason));
 
-        batches[_batchId].status = Status.Lost;
-
-        batchHistory[_batchId].push(HistoryItem({
-            from: batches[_batchId].currentOwner,
-            to: address(0),
-            timestamp: block.timestamp,
-            status: Status.Lost,
-            location: batches[_batchId].location,
-            notes: _reason
-        }));
-
-        // ── Notify the manufacturer that a batch was reported lost ────
-        string memory lostMsg = string(abi.encodePacked(
-            "LOST ALERT: Batch ", _batchId, " (", batches[_batchId].medicineName, ") reported lost/damaged. Reason: ", _reason
-        ));
-        _pushNotification(manufacturer, _batchId, lostMsg, Severity.Critical);
-
-        // ── Walk the batch history and notify ALL previous holders ────
-        HistoryItem[] storage history = batchHistory[_batchId];
-        for (uint i = 0; i < history.length - 1; i++) {
-            address pastHolder = history[i].to;
-            // Skip zero-address, skip manufacturer (already notified), skip current reporter
-            if (pastHolder != address(0) && pastHolder != manufacturer && pastHolder != previousOwner) {
-                string memory chainMsg = string(abi.encodePacked(
-                    "SUPPLY CHAIN ALERT: Batch ", _batchId, " you previously handled was reported LOST. Reason: ", _reason
-                ));
-                _pushNotification(pastHolder, _batchId, chainMsg, Severity.Warning);
-            }
-        }
+        string memory m = string(abi.encodePacked("LOST: Batch ", _batchId, " reported lost. Reason: ", _reason));
+        _notify(b.manufacturer, _batchId, m, Severity.Critical);
+        _notifyChain(_batchId, b.manufacturer, prev, m, Severity.Warning);
 
         emit BatchLost(_batchId, msg.sender, _reason);
     }
 
-    // ── Reject Batch (new) ─────────────────────────────────────────────
     function rejectBatch(string memory _batchId, string memory _reason) public {
-        require(batches[_batchId].exists, "Batch does not exist");
-        require(batches[_batchId].currentOwner == msg.sender, "Only current holder can reject a batch");
+        Batch storage b = batches[_batchId];
+        require(b.exists, "Not found");
+        require(b.currentOwner == msg.sender, "Not holder");
 
-        address manufacturer = batches[_batchId].manufacturer;
+        b.status = Status.Rejected;
+        batchHistory[_batchId].push(HistoryItem(msg.sender, msg.sender, block.timestamp, Status.Rejected, b.location, _reason));
 
-        batches[_batchId].status = Status.Rejected;
-
-        batchHistory[_batchId].push(HistoryItem({
-            from: msg.sender,
-            to: msg.sender,
-            timestamp: block.timestamp,
-            status: Status.Rejected,
-            location: batches[_batchId].location,
-            notes: _reason
-        }));
-
-        // ── Notify the manufacturer of rejection ──────────────────────
-        string memory rejectMsg = string(abi.encodePacked(
-            "REJECTED: Batch ", _batchId, " (", batches[_batchId].medicineName, ") was rejected. Reason: ", _reason
-        ));
-        _pushNotification(manufacturer, _batchId, rejectMsg, Severity.Critical);
-
-        // ── Notify all previous holders in the chain ──────────────────
-        HistoryItem[] storage history = batchHistory[_batchId];
-        for (uint i = 0; i < history.length - 1; i++) {
-            address pastHolder = history[i].to;
-            if (pastHolder != address(0) && pastHolder != manufacturer && pastHolder != msg.sender) {
-                string memory chainMsg = string(abi.encodePacked(
-                    "SUPPLY CHAIN ALERT: Batch ", _batchId, " you previously handled was REJECTED. Reason: ", _reason
-                ));
-                _pushNotification(pastHolder, _batchId, chainMsg, Severity.Warning);
-            }
-        }
+        string memory m = string(abi.encodePacked("REJECTED: Batch ", _batchId, " rejected. Reason: ", _reason));
+        _notify(b.manufacturer, _batchId, m, Severity.Critical);
+        _notifyChain(_batchId, b.manufacturer, msg.sender, m, Severity.Warning);
 
         emit BatchRejected(_batchId, msg.sender, _reason);
     }
 
-    // ── Notification GET methods ───────────────────────────────────────
-    function getMyNotifications() public view returns (Notification[] memory) {
-        return userNotifications[msg.sender];
+    // ═══════════════════════════════════════════════════════════════════
+    // ── SCAN TRACKING & FRAUD DETECTION ───────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+
+    function recordScan(string memory _batchId) public {
+        require(batches[_batchId].exists, "Not found");
+        ScanRecord storage rec = scanRecords[_batchId];
+        rec.totalScans++;
+        rec.lastScanTime = block.timestamp;
+
+        if (rec.totalScans >= SCAN_THRESHOLD && !rec.flagged) {
+            rec.flagged = true;
+            string memory m = string(abi.encodePacked(
+                "FRAUD WARNING: Batch ", _batchId, " scanned ", _uint2str(rec.totalScans),
+                " times! Possible counterfeit duplication detected."
+            ));
+            _notify(batches[_batchId].manufacturer, _batchId, m, Severity.Critical);
+            if (batches[_batchId].currentOwner != batches[_batchId].manufacturer) {
+                _notify(batches[_batchId].currentOwner, _batchId, m, Severity.Warning);
+            }
+            emit FraudAlert(_batchId, rec.totalScans, msg.sender);
+        }
     }
+
+    function reportFakeQR(string memory _fakeBatchId) public {
+        require(!batches[_fakeBatchId].exists, "Batch exists");
+        fakeQrAttempts[_fakeBatchId]++;
+        string memory m = string(abi.encodePacked(
+            "COUNTERFEIT QR ALERT: Non-existent batch '", _fakeBatchId,
+            "' was scanned. This QR code is FAKE! Attempts: ", _uint2str(fakeQrAttempts[_fakeBatchId])
+        ));
+        _notify(owner, _fakeBatchId, m, Severity.Critical);
+        emit FakeQrScanned(_fakeBatchId, msg.sender, block.timestamp);
+    }
+
+    function getScanRecord(string memory _batchId) public view returns (uint256, uint256, bool) {
+        ScanRecord storage r = scanRecords[_batchId];
+        return (r.totalScans, r.lastScanTime, r.flagged);
+    }
+
+    // ── Notification GETs ─────────────────────────────────────────────
+    function getMyNotifications() public view returns (Notification[] memory) { return userNotifications[msg.sender]; }
 
     function getUnreadCount() public view returns (uint256) {
-        uint256 count = 0;
-        Notification[] storage notes = userNotifications[msg.sender];
-        for (uint i = 0; i < notes.length; i++) {
-            if (!notes[i].read) count++;
-        }
-        return count;
+        uint256 c = 0;
+        Notification[] storage n = userNotifications[msg.sender];
+        for (uint i = 0; i < n.length; i++) { if (!n[i].read) c++; }
+        return c;
     }
 
-    function markNotificationRead(uint256 _notificationId) public {
-        Notification[] storage notes = userNotifications[msg.sender];
-        for (uint i = 0; i < notes.length; i++) {
-            if (notes[i].id == _notificationId) {
-                notes[i].read = true;
-                return;
-            }
+    function markNotificationRead(uint256 _nid) public {
+        Notification[] storage n = userNotifications[msg.sender];
+        for (uint i = 0; i < n.length; i++) {
+            if (n[i].id == _nid) { n[i].read = true; return; }
         }
-        revert("Notification not found");
+        revert("Not found");
     }
 
     function markAllRead() public {
-        Notification[] storage notes = userNotifications[msg.sender];
-        for (uint i = 0; i < notes.length; i++) {
-            notes[i].read = false;
-            notes[i].read = true;
-        }
+        Notification[] storage n = userNotifications[msg.sender];
+        for (uint i = 0; i < n.length; i++) { n[i].read = true; }
     }
 
-    // ── Verification GET methods  ──────────────────────────────────────
     function getBatch(string memory _batchId) public view returns (Batch memory) {
-        require(batches[_batchId].exists, "Batch does not exist");
+        require(batches[_batchId].exists, "Not found");
         return batches[_batchId];
     }
 
     function getBatchHistory(string memory _batchId) public view returns (HistoryItem[] memory) {
-        require(batches[_batchId].exists, "Batch does not exist");
+        require(batches[_batchId].exists, "Not found");
         return batchHistory[_batchId];
     }
 
-    function getMyRole() public view returns (Role) {
-        return users[msg.sender];
+    function getMyRole() public view returns (Role) { return users[msg.sender]; }
+
+    function _uint2str(uint256 _i) internal pure returns (string memory) {
+        if (_i == 0) return "0";
+        uint256 j = _i; uint256 len;
+        while (j != 0) { len++; j /= 10; }
+        bytes memory b = new bytes(len);
+        while (_i != 0) { len--; b[len] = bytes1(uint8(48 + _i % 10)); _i /= 10; }
+        return string(b);
     }
 }

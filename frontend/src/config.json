@@ -1,5 +1,5 @@
 {
-  "contractAddress": "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
+  "contractAddress": "0x610178dA211FEF7D417bC0e6FeD39F05609AD788",
   "abi": [
     {
       "inputs": [],
@@ -162,6 +162,31 @@
         {
           "indexed": false,
           "internalType": "string",
+          "name": "attemptedBatchId",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "scanner",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "FakeQrScanned",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "string",
           "name": "batchId",
           "type": "string"
         },
@@ -236,6 +261,19 @@
       ],
       "name": "UserRegistered",
       "type": "event"
+    },
+    {
+      "inputs": [],
+      "name": "SCAN_THRESHOLD",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
     },
     {
       "inputs": [],
@@ -367,23 +405,42 @@
         },
         {
           "internalType": "string",
-          "name": "_medicineName",
+          "name": "_name",
           "type": "string"
         },
         {
           "internalType": "string",
-          "name": "_expiryDate",
+          "name": "_expiry",
           "type": "string"
         },
         {
           "internalType": "string",
-          "name": "_location",
+          "name": "_loc",
           "type": "string"
         }
       ],
       "name": "createBatch",
       "outputs": [],
       "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "name": "fakeQrAttempts",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
       "type": "function"
     },
     {
@@ -567,6 +624,35 @@
       "type": "function"
     },
     {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        }
+      ],
+      "name": "getScanRecord",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
       "inputs": [],
       "name": "getUnreadCount",
       "outputs": [
@@ -590,7 +676,7 @@
       "inputs": [
         {
           "internalType": "uint256",
-          "name": "_notificationId",
+          "name": "_nid",
           "type": "uint256"
         }
       ],
@@ -626,6 +712,19 @@
         }
       ],
       "name": "recallBatch",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        }
+      ],
+      "name": "recordScan",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"
@@ -670,6 +769,19 @@
       "inputs": [
         {
           "internalType": "string",
+          "name": "_fakeBatchId",
+          "type": "string"
+        }
+      ],
+      "name": "reportFakeQR",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
           "name": "_batchId",
           "type": "string"
         },
@@ -682,6 +794,35 @@
       "name": "reportLost",
       "outputs": [],
       "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "name": "scanRecords",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "totalScans",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "lastScanTime",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bool",
+          "name": "flagged",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
       "type": "function"
     },
     {
@@ -703,7 +844,7 @@
         },
         {
           "internalType": "string",
-          "name": "_location",
+          "name": "_loc",
           "type": "string"
         }
       ],

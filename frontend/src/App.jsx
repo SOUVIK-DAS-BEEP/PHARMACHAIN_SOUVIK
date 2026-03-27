@@ -1,6 +1,6 @@
 import { useState, useEffect, useEffectEvent, useRef } from "react";
 import { ethers } from "ethers";
-import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert, Bell, Ban, Info, Clock } from "lucide-react";
+import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert, Bell, Ban, Info, Clock, Fingerprint, Scan, TriangleAlert } from "lucide-react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import config from "./config.json";
 
@@ -98,6 +98,8 @@ export default function App() {
   const [passKey, setPassKey] = useState("");
   const [batchInfo, setBatchInfo] = useState(null);
   const [batchHistory, setBatchHistory] = useState([]);
+  const [scanStats, setScanStats] = useState(null); // { totalScans, lastScanTime, flagged }
+  const [fakeQrAlert, setFakeQrAlert] = useState(null); // { batchId, message } — shown when fake QR detected
 
   // Modal & QR specific states
   const [mintedBatchId, setMintedBatchId] = useState(null);
@@ -476,15 +478,24 @@ export default function App() {
 
   const verifyBatchId = async (idToVerify) => {
     if (!idToVerify) return;
+    setFakeQrAlert(null);
+    setScanStats(null);
     
-    // Always use a hardcoded local connection for verification reads,
-    // so that even if the MetaMask wallet is mistakenly on Sepolia,
-    // reading data won't throw a generic "could not decode result data" (0x collision) error.
+    // Always use a hardcoded local connection for verification reads
     let readContract;
+    let writeContract;
     try {
       const localRpc = "http://127.0.0.1:8545";
       const readProvider = new ethers.JsonRpcProvider(localRpc);
       readContract = new ethers.Contract(contractAddress, contractABI, readProvider);
+      
+      // Create a writable contract using hardhat account #3 (neutral scanner)
+      // so scan tracking works even without MetaMask connected
+      const scannerWallet = new ethers.Wallet(
+        "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
+        readProvider
+      );
+      writeContract = new ethers.Contract(contractAddress, contractABI, scannerWallet);
       
       const code = await readProvider.getCode(contractAddress);
       if (code === "0x" || code === "0x0") {
@@ -502,10 +513,46 @@ export default function App() {
       const history = await readContract.getBatchHistory(idToVerify);
       setBatchInfo(data);
       setBatchHistory(history);
+      
+      // ── Record the scan on-chain (track scan frequency) ──────────
+      try {
+        const tx = await writeContract.recordScan(idToVerify);
+        await tx.wait();
+        console.log("Scan recorded on-chain for", idToVerify);
+      } catch (scanErr) {
+        console.warn("Could not record scan:", scanErr);
+      }
+
+      // ── Fetch scan stats to display ──────────────────────────────
+      try {
+        const [totalScans, lastScanTime, flagged] = await readContract.getScanRecord(idToVerify);
+        setScanStats({
+          totalScans: Number(totalScans),
+          lastScanTime: Number(lastScanTime),
+          flagged: flagged
+        });
+      } catch (statErr) {
+        console.warn("Could not fetch scan stats:", statErr);
+      }
     } catch (err) {
       console.error("Verification failed:", err);
-      alert(`Batch ${idToVerify} not found on the active local blockchain.`);
       setBatchInfo(null);
+      setScanStats(null);
+
+      // ── FAKE QR DETECTED — batch doesn't exist on blockchain ────
+      setFakeQrAlert({
+        batchId: idToVerify,
+        message: `QR code for batch "${idToVerify}" is NOT registered on the blockchain. This may be a counterfeit product!`
+      });
+
+      // ── Report the fake QR on-chain → notifies admin/manufacturer
+      try {
+        const tx = await writeContract.reportFakeQR(idToVerify);
+        await tx.wait();
+        console.log("Fake QR reported on-chain for", idToVerify);
+      } catch (reportErr) {
+        console.warn("Could not report fake QR on-chain:", reportErr);
+      }
     }
   };
 
@@ -1248,6 +1295,50 @@ export default function App() {
                     <input required type="text" value={verifyId} onChange={e=>setVerifyId(e.target.value.toUpperCase().trim())} className="flex-1 px-4 py-3 rounded-xl border border-slate-700 bg-slate-800/80 text-white placeholder-slate-500 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none transition-all" placeholder="Enter Batch ID (e.g. BCH-XYZ) to audit timeline..." />
                     <button type="submit" className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-8 py-3 rounded-xl transition-all shadow-lg shadow-cyan-600/30">Audit Tracker</button>
                   </form>
+
+                  {/* ── FAKE QR ALERT BANNER (Industry) ── */}
+                  {fakeQrAlert && (
+                    <div className="relative z-10 mb-8 bg-red-900/80 border-2 border-red-500 rounded-2xl p-6 animate-pulse-once">
+                      <div className="flex items-start gap-4">
+                        <div className="flex-shrink-0 w-14 h-14 bg-red-500 rounded-xl flex items-center justify-center shadow-lg shadow-red-500/40">
+                          <TriangleAlert className="w-7 h-7 text-white" />
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="text-red-400 text-lg font-bold uppercase tracking-wider mb-1">⚠ Counterfeit QR Detected</h4>
+                          <p className="text-red-200 text-sm leading-relaxed">{fakeQrAlert.message}</p>
+                          <div className="flex items-center gap-3 mt-3">
+                            <span className="text-red-400 text-xs font-mono bg-red-950 border border-red-700 px-3 py-1 rounded-lg">{fakeQrAlert.batchId}</span>
+                            <span className="text-red-300 text-xs">Admin has been automatically notified</span>
+                          </div>
+                        </div>
+                        <button onClick={() => setFakeQrAlert(null)} className="text-red-400 hover:text-white p-1 rounded-full hover:bg-red-800 transition-colors flex-shrink-0">
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── SCAN STATS BADGE (Industry) ── */}
+                  {scanStats && batchInfo && (
+                    <div className={`relative z-10 mb-6 flex items-center gap-4 px-5 py-3 rounded-xl border ${scanStats.flagged ? 'bg-red-900/50 border-red-600' : 'bg-slate-800 border-slate-700'}`}>
+                      <Scan className={`w-5 h-5 ${scanStats.flagged ? 'text-red-400' : 'text-cyan-400'}`} />
+                      <div className="flex items-center gap-6 text-sm">
+                        <span className={`font-medium ${scanStats.flagged ? 'text-red-300' : 'text-slate-300'}`}>
+                          Total Scans: <strong className={scanStats.flagged ? 'text-red-400' : 'text-white'}>{scanStats.totalScans}</strong>
+                        </span>
+                        {scanStats.lastScanTime > 0 && (
+                          <span className="text-slate-400">
+                            Last: {new Date(scanStats.lastScanTime * 1000).toLocaleString()}
+                          </span>
+                        )}
+                        {scanStats.flagged && (
+                          <span className="text-red-400 font-bold text-xs uppercase tracking-wider bg-red-950 border border-red-700 px-3 py-1 rounded-full animate-pulse flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3" /> Fraud Flagged
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   
                   {batchInfo && (
                     <div className="border-t border-slate-700 pt-8 mt-8 relative z-10">
@@ -1360,6 +1451,48 @@ export default function App() {
                 </button>
               </form>
             </div>
+
+            {/* ── FAKE QR ALERT BANNER (Customer) ── */}
+            {fakeQrAlert && (
+              <div className="bg-red-900 border-t-4 border-red-500 p-8 md:p-12">
+                <div className="flex items-start gap-5">
+                  <div className="flex-shrink-0 w-16 h-16 bg-red-500 rounded-2xl flex items-center justify-center shadow-lg shadow-red-500/40 animate-pulse">
+                    <TriangleAlert className="w-8 h-8 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="text-red-300 text-2xl font-extrabold uppercase tracking-wider mb-2">⚠ Counterfeit Product Warning</h4>
+                    <p className="text-red-200 text-base leading-relaxed mb-3">{fakeQrAlert.message}</p>
+                    <div className="bg-red-950/50 border border-red-700 rounded-xl p-4">
+                      <p className="text-red-300 text-sm font-medium">
+                        <strong>Do NOT consume this medicine.</strong> This QR code does not match any legitimate pharmaceutical batch on the blockchain. 
+                        The manufacturer and regulatory authorities have been automatically alerted.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 mt-4">
+                      <span className="text-red-400 text-xs font-mono bg-red-950 border border-red-700 px-3 py-1 rounded-lg">{fakeQrAlert.batchId}</span>
+                      <span className="text-red-300 text-xs font-medium">Reported on-chain · Authorities notified</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── SCAN STATS (Customer) ── */}
+            {scanStats && batchInfo && (
+              <div className={`px-8 md:px-12 py-4 border-t ${scanStats.flagged ? 'bg-red-900/60 border-red-700' : 'bg-slate-800/50 border-slate-700'}`}>
+                <div className="flex items-center gap-4">
+                  <Scan className={`w-5 h-5 ${scanStats.flagged ? 'text-red-400' : 'text-blue-400'}`} />
+                  <span className={`text-sm font-medium ${scanStats.flagged ? 'text-red-300' : 'text-slate-300'}`}>
+                    This product has been scanned <strong className={scanStats.flagged ? 'text-red-400' : 'text-white'}>{scanStats.totalScans}</strong> time{scanStats.totalScans !== 1 ? 's' : ''}
+                  </span>
+                  {scanStats.flagged && (
+                    <span className="text-red-400 font-bold text-xs uppercase tracking-wider bg-red-950 border border-red-700 px-3 py-1 rounded-full animate-pulse flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" /> Suspicious Activity
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
 
             {batchInfo && (
               <div className="bg-slate-800 border-t border-slate-700 p-8 md:p-12">
