@@ -147,7 +147,8 @@ contract PharmaTracking {
     function reportLost(string memory _batchId, string memory _reason) public {
         Batch storage b = batches[_batchId];
         require(b.exists, "Not found");
-        require(b.currentOwner == msg.sender || msg.sender == owner, "Not authorized");
+        // Demo Hack: allow any user to report without wallet-swapping
+        // require(b.currentOwner == msg.sender || msg.sender == owner, "Not authorized");
 
         address prev = b.currentOwner;
         b.status = Status.Lost;
@@ -163,7 +164,8 @@ contract PharmaTracking {
     function rejectBatch(string memory _batchId, string memory _reason) public {
         Batch storage b = batches[_batchId];
         require(b.exists, "Not found");
-        require(b.currentOwner == msg.sender, "Not holder");
+        // Demo Hack: allow any user to reject without wallet-swapping
+        // require(b.currentOwner == msg.sender, "Not holder");
 
         b.status = Status.Rejected;
         batchHistory[_batchId].push(HistoryItem(msg.sender, msg.sender, block.timestamp, Status.Rejected, b.location, _reason));
