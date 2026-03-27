@@ -1,6 +1,6 @@
 import { useState, useEffect, useEffectEvent, useRef } from "react";
 import { ethers } from "ethers";
-import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert, Ban, XCircle, Thermometer, Info, Camera } from "lucide-react";
+import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert, Ban, XCircle, Thermometer, Info, Camera, Bell, TriangleAlert, Clock, Fingerprint, Scan } from "lucide-react";
 import { Html5QrcodeScanner, Html5Qrcode } from "html5-qrcode";
 import Barcode from "react-barcode";
 import config from "./config.json";
@@ -11,6 +11,12 @@ const WALLET_STORAGE_KEY = "pharmachain.wallet";
 
 const ROLES = { 0: "None", 1: "Manufacturer", 2: "Distributor", 3: "Retailer / Healthcare Provider" };
 const STATUS = { 0: "Manufactured", 1: "In Transit", 2: "Delivered", 3: "Recalled", 4: "Sold", 5: "Lost", 6: "Rejected", 7: "Flagged" };
+const SEVERITY = { 0: "Info", 1: "Warning", 2: "Critical" };
+const SEVERITY_COLORS = {
+  0: { bg: "bg-blue-50", border: "border-blue-200", text: "text-blue-700", icon: "text-blue-500", badge: "bg-blue-500" },
+  1: { bg: "bg-amber-50", border: "border-amber-200", text: "text-amber-700", icon: "text-amber-500", badge: "bg-amber-500" },
+  2: { bg: "bg-red-50", border: "border-red-200", text: "text-red-700", icon: "text-red-500", badge: "bg-red-500" },
+};
 
 // ── Wallet detection via EIP-6963 + legacy fallback ────────────────────────
 const getLegacyWalletOptions = () => {
@@ -97,7 +103,7 @@ const QRScannerPlugin = ({ onScanSuccess }) => {
 
 export default function App() {
   const [view, setView] = useState("landing");
-  const [, setProvider] = useState(null);
+  const [provider, setProvider] = useState(null);
   const [account, setAccount] = useState("");
   const [contract, setContract] = useState(null);
   const [role, setRole] = useState(0);
@@ -138,6 +144,8 @@ export default function App() {
   const [passKey, setPassKey] = useState("");
   const [batchInfo, setBatchInfo] = useState(null);
   const [batchHistory, setBatchHistory] = useState([]);
+  const [scanStats, setScanStats] = useState(null); // { totalScans, lastScanTime, flagged }
+  const [fakeQrAlert, setFakeQrAlert] = useState(null); // { batchId, message } — shown when fake QR detected
 
   // Batch count tracking
   const [totalBatchCount, setTotalBatchCount] = useState(0);
@@ -178,6 +186,13 @@ export default function App() {
   // Verification: parent/child batch info
   const [batchParentId, setBatchParentId] = useState("");
   const [batchSubIds, setBatchSubIds] = useState([]);
+
+  // ── Notification State ──────────────────────────────────────────────
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const notifPollRef = useRef(null);
+  const notifPanelRef = useRef(null);
 
   // EIP-6963: modern wallet discovery (MetaMask, Coinbase, etc.)
   const [eip6963Wallets, setEip6963Wallets] = useState([]);
@@ -486,8 +501,26 @@ export default function App() {
     }
   };
 
+  const ensureLocalNetwork = async () => {
+    if (!provider) {
+      console.warn("ensureLocalNetwork: provider is null, skipping network check.");
+      return true; // Allow transactions via contract signer even if provider ref isn't stored
+    }
+    try {
+      const net = await provider.getNetwork();
+      if (Number(net.chainId) !== 31337) {
+        alert("⚠️ Wrong Network Detected!\n\nYour MetaMask is currently connected to " + (net.name || "another network") + " instead of Localhost.\n\nPlease open the MetaMask extension, click the network dropdown at the top, and explicitly select 'Localhost 8545' before trying to send a transaction.");
+        return false;
+      }
+    } catch (err) {
+      console.warn("ensureLocalNetwork: could not check network, proceeding anyway.", err);
+    }
+    return true;
+  };
+
   const registerRole = async (selectedRole) => {
     if (!contract || !account) return alert("Please connect wallet first");
+    if (!(await ensureLocalNetwork())) return;
     try {
       const tx = await contract.registerUser(account, selectedRole);
       await tx.wait();
@@ -502,6 +535,7 @@ export default function App() {
   const createBatch = async (e) => {
     e.preventDefault();
     if (!contract) return;
+    if (!(await ensureLocalNetwork())) return;
     try {
       const newId = "BCH-" + crypto.getRandomValues(new Uint32Array(1))[0].toString(16).toUpperCase().padStart(8, '0');
       const distAddr = expectedDistributor.trim() || ethers.ZeroAddress;
@@ -510,6 +544,7 @@ export default function App() {
       await tx.wait();
       
       setMintedBatchId(newId);
+      fetchNotifications();
       
       // Refresh batch counts
       try {
@@ -551,6 +586,7 @@ export default function App() {
       } catch {}
       alert("Batch Transfer Recorded!");
       setTransferQrBatchId(cleanId);
+      if (typeof fetchNotifications === "function") fetchNotifications();
       setTransferId(""); setTransferTo(""); setTransferLoc("");
     } catch (err) {
       console.error(err);
@@ -584,6 +620,7 @@ export default function App() {
       } catch {}
       alert("Batch Transfer Recorded!");
       setTransferQrBatchId(cleanId);
+      if (typeof fetchNotifications === "function") fetchNotifications();
       setRetTransferId(""); setRetTransferTo(""); setRetTransferLoc("");
     } catch (err) {
       console.error(err);
@@ -611,12 +648,47 @@ export default function App() {
 
   const verifyBatchId = async (idToVerify) => {
     if (!idToVerify) return;
+    setFakeQrAlert(null);
+    setScanStats(null);
     
-    // Fallback to a read-only provider if wallet isn't connected (for Customers)
     let readContract = contract;
-    if (!readContract) {
-      const readProvider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+    let writeContract;
+    try {
+      if (!readContract) {
+        const readProvider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+        readContract = new ethers.Contract(contractAddress, contractABI, readProvider);
+        
+        // Create a writable contract using hardhat account #3 (neutral scanner)
+        // so scan tracking works even without MetaMask connected
+        const scannerWallet = new ethers.Wallet(
+          "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
+          readProvider
+        );
+        writeContract = new ethers.Contract(contractAddress, contractABI, scannerWallet);
+        
+        const code = await readProvider.getCode(contractAddress);
+        if (code === "0x" || code === "0x0") {
+          throw new Error(`Contract not found on local blockchain at ${contractAddress}. Have you run the hardhat deploy script?`);
+        }
+      }
       readContract = new ethers.Contract(contractAddress, contractABI, readProvider);
+      
+      // Create a writable contract using hardhat account #3 (neutral scanner)
+      // so scan tracking works even without MetaMask connected
+      const scannerWallet = new ethers.Wallet(
+        "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
+        readProvider
+      );
+      writeContract = new ethers.Contract(contractAddress, contractABI, scannerWallet);
+      
+      const code = await readProvider.getCode(contractAddress);
+      if (code === "0x" || code === "0x0") {
+        throw new Error(`Contract not found on local blockchain at ${contractAddress}. Have you run the hardhat deploy script?`);
+      }
+    } catch (e) {
+      console.error(e);
+      alert(e.message || "Failed to establish connection to the blockchain.");
+      return;
     }
 
     try {
@@ -669,13 +741,49 @@ export default function App() {
         const route = await readContract.getExpectedRoute(idToVerify);
         setBatchExpectedRoute({ distributor: route[0], retailer: route[1] });
       } catch { setBatchExpectedRoute(null); }
+      
+      // ── Record the scan on-chain (track scan frequency) ──────────
+      try {
+        const tx = await writeContract.recordScan(idToVerify);
+        await tx.wait();
+        console.log("Scan recorded on-chain for", idToVerify);
+      } catch (scanErr) {
+        console.warn("Could not record scan:", scanErr);
+      }
+
+      // ── Fetch scan stats to display ──────────────────────────────
+      try {
+        const [totalScans, lastScanTime, flagged] = await readContract.getScanRecord(idToVerify);
+        setScanStats({
+          totalScans: Number(totalScans),
+          lastScanTime: Number(lastScanTime),
+          flagged: flagged
+        });
+      } catch (statErr) {
+        console.warn("Could not fetch scan stats:", statErr);
+      }
     } catch (err) {
-      console.error(err);
-      alert("Batch not found on Blockchain.");
+      console.error("Verification failed:", err);
       setBatchInfo(null);
       setBatchExpectedRoute(null);
       setBatchParentId("");
       setBatchSubIds([]);
+      setScanStats(null);
+
+      // ── FAKE QR DETECTED — batch doesn't exist on blockchain ────
+      setFakeQrAlert({
+        batchId: idToVerify,
+        message: `QR code for batch "${idToVerify}" is NOT registered on the blockchain. This may be a counterfeit product!`
+      });
+
+      // ── Report the fake QR on-chain → notifies admin/manufacturer
+      try {
+        const tx = await writeContract.reportFakeQR(idToVerify);
+        await tx.wait();
+        console.log("Fake QR reported on-chain for", idToVerify);
+      } catch (reportErr) {
+        console.warn("Could not report fake QR on-chain:", reportErr);
+      }
     }
   };
 
@@ -741,6 +849,91 @@ export default function App() {
     } else {
       alert("Invalid organization access key.");
     }
+  };
+
+  // ── Notification Functions ────────────────────────────────────────────
+  const fetchNotifications = async () => {
+    if (!contract) return;
+    try {
+      const notifs = await contract.getMyNotifications();
+      const parsed = notifs.map(n => ({
+        id: Number(n.id),
+        batchId: n.batchId,
+        message: n.message,
+        triggeredBy: n.triggeredBy,
+        timestamp: Number(n.timestamp),
+        severity: Number(n.severity),
+        read: n.read,
+      }));
+      // Sort newest first
+      parsed.sort((a, b) => b.timestamp - a.timestamp);
+      setNotifications(parsed);
+      setUnreadCount(parsed.filter(n => !n.read).length);
+    } catch (err) {
+      console.warn("Could not fetch notifications:", err);
+    }
+  };
+
+  const markSingleRead = async (notifId) => {
+    if (!contract) return;
+    try {
+      const tx = await contract.markNotificationRead(notifId);
+      await tx.wait();
+      fetchNotifications();
+    } catch (err) {
+      console.error("Failed to mark notification read:", err);
+    }
+  };
+
+  const markAllNotifRead = async () => {
+    if (!contract) return;
+    try {
+      const tx = await contract.markAllRead();
+      await tx.wait();
+      fetchNotifications();
+    } catch (err) {
+      console.error("Failed to mark all read:", err);
+    }
+  };
+
+  // Poll notifications every 5 seconds when connected
+  useEffect(() => {
+    if (contract && account) {
+      fetchNotifications();
+      notifPollRef.current = setInterval(fetchNotifications, 5000);
+    }
+    return () => {
+      if (notifPollRef.current) clearInterval(notifPollRef.current);
+    };
+  }, [contract, account]);
+
+  // Close notification panel on click outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (notifPanelRef.current && !notifPanelRef.current.contains(e.target)) {
+        setShowNotifications(false);
+      }
+    };
+    if (showNotifications) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showNotifications]);
+
+  const getSeverityIcon = (severity) => {
+    switch (severity) {
+      case 2: return <AlertTriangle className="w-5 h-5" />;
+      case 1: return <ShieldAlert className="w-5 h-5" />;
+      default: return <Info className="w-5 h-5" />;
+    }
+  };
+
+  const timeAgo = (timestamp) => {
+    const seconds = Math.floor(Date.now() / 1000 - timestamp);
+    if (seconds < 60) return "Just now";
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return new Date(timestamp * 1000).toLocaleDateString();
   };
 
   // Landing view
@@ -1004,20 +1197,144 @@ export default function App() {
           </button>
           <div className="flex items-center gap-2">
             <ShieldCheck className="text-blue-600 w-8 h-8" />
-            <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-cyan-500">
-              PharmaChain {view === "industry" ? "Portal" : "Verify"}
-            </h1>
+            <div className="flex flex-col">
+              <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-700 to-cyan-500 leading-none">
+                PharmaChain {view === "industry" ? "Portal" : "Verify"}
+              </h1>
+              <div className="flex items-center gap-2 mt-1">
+                <span className={`w-2 h-2 rounded-full ${account ? 'bg-emerald-500' : 'bg-slate-300'} animate-pulse`}></span>
+                <span className="text-[10px] uppercase font-bold tracking-widest text-slate-400">
+                  {account ? `Connected: ${walletName}` : "Not Connected"}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
         {view === "industry" && (
           <div className="flex items-center gap-3">
             {account && (
-              <button
-                onClick={signOut}
-                className="border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-full font-medium transition-all"
-              >
-                Sign Out
-              </button>
+              <>
+                {/* ── Notification Bell ───────────────────────── */}
+                <div className="relative" ref={notifPanelRef}>
+                  <button
+                    onClick={() => setShowNotifications(!showNotifications)}
+                    className="relative p-2.5 rounded-full border border-slate-200 hover:border-blue-400 bg-white hover:bg-blue-50 transition-all group"
+                    title="Notifications"
+                  >
+                    <Bell className="w-5 h-5 text-slate-600 group-hover:text-blue-600 transition-colors" />
+                    {unreadCount > 0 && (
+                      <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center animate-bounce shadow-lg shadow-red-500/40">
+                        {unreadCount > 9 ? "9+" : unreadCount}
+                      </span>
+                    )}
+                  </button>
+
+                  {/* ── Notification Dropdown Panel ────────────── */}
+                  {showNotifications && (
+                    <div className="absolute right-0 top-14 w-[420px] max-h-[70vh] bg-white rounded-2xl shadow-2xl border border-slate-200 z-[200] overflow-hidden flex flex-col animate-in">
+                      {/* Header */}
+                      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
+                        <div className="flex items-center gap-2">
+                          <Bell className="w-5 h-5 text-blue-600" />
+                          <h3 className="text-lg font-bold text-slate-800">Notifications</h3>
+                          {unreadCount > 0 && (
+                            <span className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                              {unreadCount} new
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {unreadCount > 0 && (
+                            <button
+                              onClick={markAllNotifRead}
+                              className="text-xs text-blue-600 hover:text-blue-800 font-semibold hover:underline transition-colors"
+                            >
+                              Mark all read
+                            </button>
+                          )}
+                          <button
+                            onClick={() => setShowNotifications(false)}
+                            className="text-slate-400 hover:text-slate-700 p-1 rounded-full hover:bg-slate-100 transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Notification List */}
+                      <div className="overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-slate-200">
+                        {notifications.length === 0 ? (
+                          <div className="flex flex-col items-center justify-center py-16 px-6 text-center">
+                            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+                              <Bell className="w-8 h-8 text-slate-300" />
+                            </div>
+                            <p className="text-slate-500 font-medium">No notifications yet</p>
+                            <p className="text-slate-400 text-sm mt-1">Supply chain alerts will appear here when batches are flagged, lost, recalled, or rejected.</p>
+                          </div>
+                        ) : (
+                          notifications.map((notif) => {
+                            const colors = SEVERITY_COLORS[notif.severity] || SEVERITY_COLORS[0];
+                            return (
+                              <div
+                                key={notif.id}
+                                className={`px-5 py-4 border-b border-slate-100 hover:bg-slate-50/80 transition-colors cursor-pointer ${!notif.read ? 'bg-blue-50/30 border-l-4 border-l-blue-500' : 'border-l-4 border-l-transparent'}`}
+                                onClick={() => { if (!notif.read) markSingleRead(notif.id); }}
+                              >
+                                <div className="flex items-start gap-3">
+                                  {/* Severity Icon */}
+                                  <div className={`flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center ${colors.bg} ${colors.icon} mt-0.5`}>
+                                    {getSeverityIcon(notif.severity)}
+                                  </div>
+
+                                  {/* Content */}
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center justify-between gap-2 mb-1">
+                                      <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${colors.bg} ${colors.text} ${colors.border} border`}>
+                                        {SEVERITY[notif.severity]}
+                                      </span>
+                                      <div className="flex items-center gap-1 text-slate-400 shrink-0">
+                                        <Clock className="w-3 h-3" />
+                                        <span className="text-[10px] font-medium">{timeAgo(notif.timestamp)}</span>
+                                      </div>
+                                    </div>
+                                    <p className={`text-sm leading-snug ${notif.read ? 'text-slate-500' : 'text-slate-800 font-medium'}`}>
+                                      {notif.message}
+                                    </p>
+                                    <div className="flex items-center gap-3 mt-2">
+                                      <span className="text-[10px] text-slate-400 font-mono bg-slate-100 px-2 py-0.5 rounded">
+                                        {notif.batchId}
+                                      </span>
+                                      {!notif.read && (
+                                        <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      {/* Footer */}
+                      {notifications.length > 0 && (
+                        <div className="px-6 py-3 border-t border-slate-100 bg-slate-50/50 text-center">
+                          <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">
+                            {notifications.length} notification{notifications.length !== 1 ? 's' : ''} · Stored on-chain
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  onClick={signOut}
+                  className="border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-full font-medium transition-all"
+                >
+                  Sign Out
+                </button>
+              </>
             )}
             <button
               onClick={account ? undefined : openWalletPicker}
@@ -1377,6 +1694,7 @@ export default function App() {
                       <form onSubmit={async (e) => {
                         e.preventDefault();
                         if(!contract) return;
+                        if (!(await ensureLocalNetwork())) return;
                         try {
                           const tx = await contract.recallBatch(recallId.toUpperCase().trim(), recallReason);
                           await tx.wait();
@@ -1388,6 +1706,7 @@ export default function App() {
                             setTotalBatchCount(Number(total));
                             setActiveBatchCountState(Number(active));
                           } catch {}
+                          if (typeof fetchNotifications === "function") fetchNotifications();
                         } catch (err) { alert("Error recalling batch. Make sure you are the Origin Manufacturer."); console.error(err); }
                       }} className="space-y-4">
                         <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-red-200 focus:ring-2 focus:ring-red-500 outline-none bg-white" onChange={e=>setRecallId(e.target.value)} />
@@ -1404,6 +1723,7 @@ export default function App() {
                         <form onSubmit={async (e) => {
                           e.preventDefault();
                           if(!contract) return;
+                          if (!(await ensureLocalNetwork())) return;
                           try {
                             const tx = await contract.reportLost(lostId.toUpperCase().trim(), lostReason);
                             await tx.wait();
@@ -1415,6 +1735,7 @@ export default function App() {
                               setTotalBatchCount(Number(total));
                               setActiveBatchCountState(Number(active));
                             } catch {}
+                            if (typeof fetchNotifications === "function") fetchNotifications();
                           } catch (err) { alert("Error reporting batch. Must be Current Holder."); console.error(err); }
                         }} className="space-y-4">
                           <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white" onChange={e=>setLostId(e.target.value)} />
@@ -1530,6 +1851,50 @@ export default function App() {
                     <input required type="text" value={verifyId} onChange={e=>setVerifyId(e.target.value.toUpperCase().trim())} className="flex-1 px-4 py-3 rounded-xl border border-slate-700 bg-slate-800/80 text-white placeholder-slate-500 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none transition-all" placeholder="Enter Batch ID (e.g. BCH-XYZ) to audit timeline..." />
                     <button type="submit" className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-8 py-3 rounded-xl transition-all shadow-lg shadow-cyan-600/30">Audit Tracker</button>
                   </form>
+
+                  {/* ── FAKE QR ALERT BANNER (Industry) ── */}
+                  {fakeQrAlert && (
+                    <div className="relative z-10 mb-8 bg-red-900/80 border-2 border-red-500 rounded-2xl p-6 animate-pulse-once">
+                      <div className="flex items-start gap-4">
+                        <div className="flex-shrink-0 w-14 h-14 bg-red-500 rounded-xl flex items-center justify-center shadow-lg shadow-red-500/40">
+                          <TriangleAlert className="w-7 h-7 text-white" />
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="text-red-400 text-lg font-bold uppercase tracking-wider mb-1">⚠ Counterfeit QR Detected</h4>
+                          <p className="text-red-200 text-sm leading-relaxed">{fakeQrAlert.message}</p>
+                          <div className="flex items-center gap-3 mt-3">
+                            <span className="text-red-400 text-xs font-mono bg-red-950 border border-red-700 px-3 py-1 rounded-lg">{fakeQrAlert.batchId}</span>
+                            <span className="text-red-300 text-xs">Admin has been automatically notified</span>
+                          </div>
+                        </div>
+                        <button onClick={() => setFakeQrAlert(null)} className="text-red-400 hover:text-white p-1 rounded-full hover:bg-red-800 transition-colors flex-shrink-0">
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── SCAN STATS BADGE (Industry) ── */}
+                  {scanStats && batchInfo && (
+                    <div className={`relative z-10 mb-6 flex items-center gap-4 px-5 py-3 rounded-xl border ${scanStats.flagged ? 'bg-red-900/50 border-red-600' : 'bg-slate-800 border-slate-700'}`}>
+                      <Scan className={`w-5 h-5 ${scanStats.flagged ? 'text-red-400' : 'text-cyan-400'}`} />
+                      <div className="flex items-center gap-6 text-sm">
+                        <span className={`font-medium ${scanStats.flagged ? 'text-red-300' : 'text-slate-300'}`}>
+                          Total Scans: <strong className={scanStats.flagged ? 'text-red-400' : 'text-white'}>{scanStats.totalScans}</strong>
+                        </span>
+                        {scanStats.lastScanTime > 0 && (
+                          <span className="text-slate-400">
+                            Last: {new Date(scanStats.lastScanTime * 1000).toLocaleString()}
+                          </span>
+                        )}
+                        {scanStats.flagged && (
+                          <span className="text-red-400 font-bold text-xs uppercase tracking-wider bg-red-950 border border-red-700 px-3 py-1 rounded-full animate-pulse flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3" /> Fraud Flagged
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   
                   {batchInfo && (
                     <div className="border-t border-slate-700 pt-8 mt-8 relative z-10">
@@ -1716,6 +2081,48 @@ export default function App() {
                 </button>
               </form>
             </div>
+
+            {/* ── FAKE QR ALERT BANNER (Customer) ── */}
+            {fakeQrAlert && (
+              <div className="bg-red-900 border-t-4 border-red-500 p-8 md:p-12">
+                <div className="flex items-start gap-5">
+                  <div className="flex-shrink-0 w-16 h-16 bg-red-500 rounded-2xl flex items-center justify-center shadow-lg shadow-red-500/40 animate-pulse">
+                    <TriangleAlert className="w-8 h-8 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="text-red-300 text-2xl font-extrabold uppercase tracking-wider mb-2">⚠ Counterfeit Product Warning</h4>
+                    <p className="text-red-200 text-base leading-relaxed mb-3">{fakeQrAlert.message}</p>
+                    <div className="bg-red-950/50 border border-red-700 rounded-xl p-4">
+                      <p className="text-red-300 text-sm font-medium">
+                        <strong>Do NOT consume this medicine.</strong> This QR code does not match any legitimate pharmaceutical batch on the blockchain. 
+                        The manufacturer and regulatory authorities have been automatically alerted.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 mt-4">
+                      <span className="text-red-400 text-xs font-mono bg-red-950 border border-red-700 px-3 py-1 rounded-lg">{fakeQrAlert.batchId}</span>
+                      <span className="text-red-300 text-xs font-medium">Reported on-chain · Authorities notified</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── SCAN STATS (Customer) ── */}
+            {scanStats && batchInfo && (
+              <div className={`px-8 md:px-12 py-4 border-t ${scanStats.flagged ? 'bg-red-900/60 border-red-700' : 'bg-slate-800/50 border-slate-700'}`}>
+                <div className="flex items-center gap-4">
+                  <Scan className={`w-5 h-5 ${scanStats.flagged ? 'text-red-400' : 'text-blue-400'}`} />
+                  <span className={`text-sm font-medium ${scanStats.flagged ? 'text-red-300' : 'text-slate-300'}`}>
+                    This product has been scanned <strong className={scanStats.flagged ? 'text-red-400' : 'text-white'}>{scanStats.totalScans}</strong> time{scanStats.totalScans !== 1 ? 's' : ''}
+                  </span>
+                  {scanStats.flagged && (
+                    <span className="text-red-400 font-bold text-xs uppercase tracking-wider bg-red-950 border border-red-700 px-3 py-1 rounded-full animate-pulse flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" /> Suspicious Activity
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
 
             {batchInfo && (() => {
               const statusNum = Number(batchInfo.status);

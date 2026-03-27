@@ -4,6 +4,21 @@ pragma solidity ^0.8.20;
 contract PharmaTracking {
     enum Role { None, Manufacturer, Distributor, Retailer }
     enum Status { Manufactured, InTransit, Delivered, Recalled, Sold, Lost, Rejected, Flagged }
+    enum Severity { Info, Warning, Critical }
+    struct ScanRecord {
+        uint256 totalScans;
+        uint256 lastScanTime;
+        bool flagged;
+    }
+    struct Notification {
+        uint256 id;
+        string batchId;
+        string message;
+        address triggeredBy;
+        uint256 timestamp;
+        Severity severity;
+        bool read;
+    }
 
     struct Batch {
         string batchId;
@@ -32,6 +47,8 @@ contract PharmaTracking {
     address public owner;
     uint256 public batchCount;
     uint256 public activeBatchCount;
+    uint256 private _nextNotificationId;
+    uint256 public constant SCAN_THRESHOLD = 5;
 
     mapping(address => Role) public users;
     mapping(string => Batch) public batches;
@@ -39,6 +56,10 @@ contract PharmaTracking {
     mapping(address => uint256) public deviationCount;
     mapping(address => uint256) public totalTransfersHandled;
     mapping(string => string[]) public subBatchIds; // parent -> children
+
+    mapping(address => Notification[]) private userNotifications;
+    mapping(string => ScanRecord) public scanRecords;
+    mapping(string => uint256) public fakeQrAttempts;
 
     event UserRegistered(address indexed user, Role role);
     event BatchCreated(string batchId, string medicineName, address indexed manufacturer);
@@ -48,6 +69,8 @@ contract PharmaTracking {
     event BatchSold(string batchId, address indexed soldBy);
     event BatchLost(string batchId, address indexed reportedBy, string reason);
     event BatchDeactivated(string batchId, Status terminalStatus, address indexed deactivatedBy, string reason);
+    event FakeQrScanned(string attemptedBatchId, address scanner, uint256 timestamp);
+    event NotificationCreated(address indexed recipient, uint256 notificationId, string batchId, string message, Severity severity);
     event RouteDeviation(string batchId, address expected, address actual, address indexed sender);
     event BatchFlagged(string batchId, address indexed flaggedBy, string reason);
     event FraudAlert(string batchId, uint256 scanCount, address scanner);
@@ -430,4 +453,72 @@ contract PharmaTracking {
         while (_i != 0) { k--; bstr[k] = bytes1(uint8(48 + _i % 10)); _i /= 10; }
         return string(bstr);
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ── NOTIFICATIONS & ALERTS ─────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+    function _notify(address _recipient, string memory _batchId, string memory _msg, Severity _sev) internal {
+        if (_recipient == address(0)) return;
+        _nextNotificationId++;
+        userNotifications[_recipient].push(Notification(_nextNotificationId, _batchId, _msg, msg.sender, block.timestamp, _sev, false));
+        emit NotificationCreated(_recipient, _nextNotificationId, _batchId, _msg, _sev);
+    }
+
+    function _notifyChain(string memory _batchId, address _mfr, address _actor, string memory _msg, Severity _sev) internal {
+        _notify(_mfr, _batchId, _msg, _sev);
+        if (_actor != _mfr && _actor != address(0)) _notify(_actor, _batchId, _msg, _sev);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ── SCAN TRACKING & FRAUD DETECTION ───────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+    function recordScan(string memory _batchId) public {
+        require(batches[_batchId].exists, "Not found");
+        ScanRecord storage rec = scanRecords[_batchId];
+        rec.totalScans++;
+        rec.lastScanTime = block.timestamp;
+
+        if (rec.totalScans >= SCAN_THRESHOLD && !rec.flagged) {
+            rec.flagged = true;
+            string memory m = string(abi.encodePacked("FRAUD WARNING: Batch ", _batchId, " scanned ", _uint2str(rec.totalScans), " times! Possible counterfeit duplication."));
+            _notify(batches[_batchId].manufacturer, _batchId, m, Severity.Critical);
+            emit FraudAlert(_batchId, rec.totalScans, msg.sender);
+        }
+    }
+
+    function reportFakeQR(string memory _fakeBatchId) public {
+        require(!batches[_fakeBatchId].exists, "Batch exists");
+        fakeQrAttempts[_fakeBatchId]++;
+        string memory m = string(abi.encodePacked("COUNTERFEIT QR ALERT: Non-existent batch ", _fakeBatchId, " was scanned. Attempts: ", _uint2str(fakeQrAttempts[_fakeBatchId])));
+        _notify(owner, _fakeBatchId, m, Severity.Critical);
+        emit FakeQrScanned(_fakeBatchId, msg.sender, block.timestamp);
+    }
+
+    function getScanRecord(string memory _batchId) public view returns (uint256, uint256, bool) {
+        ScanRecord storage r = scanRecords[_batchId];
+        return (r.totalScans, r.lastScanTime, r.flagged);
+    }
+
+    // ── Notification GETs ─────────────────────────────────────────────
+    function getMyNotifications() public view returns (Notification[] memory) { return userNotifications[msg.sender]; }
+    
+    function getUnreadCount() public view returns (uint256) {
+        uint256 c = 0;
+        Notification[] storage n = userNotifications[msg.sender];
+        for (uint i = 0; i < n.length; i++) { if (!n[i].read) c++; }
+        return c;
+    }
+
+    function markNotificationRead(uint256 _nid) public {
+        Notification[] storage n = userNotifications[msg.sender];
+        for (uint i = 0; i < n.length; i++) {
+            if (n[i].id == _nid) { n[i].read = true; return; }
+        }
+    }
+
+    function markAllRead() public {
+        Notification[] storage n = userNotifications[msg.sender];
+        for (uint i = 0; i < n.length; i++) { n[i].read = true; }
+    }
+
 }
