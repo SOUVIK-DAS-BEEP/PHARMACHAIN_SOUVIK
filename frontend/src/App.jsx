@@ -1,6 +1,6 @@
 import { useState, useEffect, useEffectEvent, useRef } from "react";
 import { ethers } from "ethers";
-import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert } from "lucide-react";
+import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert, Ban, XCircle } from "lucide-react";
 import { Html5QrcodeScanner } from "html5-qrcode";
 import config from "./config.json";
 
@@ -69,6 +69,8 @@ export default function App() {
   const [batchName, setBatchName] = useState("");
   const [expiry, setExpiry] = useState("");
   const [location, setLocation] = useState("");
+  const [expectedDistributor, setExpectedDistributor] = useState("");
+  const [expectedRetailer, setExpectedRetailer] = useState("");
   
   const [transferId, setTransferId] = useState("");
   const [transferTo, setTransferTo] = useState("");
@@ -85,17 +87,34 @@ export default function App() {
   const [recallReason, setRecallReason] = useState("");
   const [lostId, setLostId] = useState("");
   const [lostReason, setLostReason] = useState("");
+  const [rejectId, setRejectId] = useState("");
+  const [rejectReason, setRejectReason] = useState("");
   const [isOwner, setIsOwner] = useState(false);
   const [passAuth, setPassAuth] = useState(false);
   const [passKey, setPassKey] = useState("");
   const [batchInfo, setBatchInfo] = useState(null);
   const [batchHistory, setBatchHistory] = useState([]);
 
+  // Batch count tracking
+  const [totalBatchCount, setTotalBatchCount] = useState(0);
+  const [activeBatchCountState, setActiveBatchCountState] = useState(0);
+
+  // Transfer pre-flight error states
+  const [transferError, setTransferError] = useState("");
+  const [retTransferError, setRetTransferError] = useState("");
+
+  // Route compliance display
+  const [batchExpectedRoute, setBatchExpectedRoute] = useState(null);
+  const [distDeviations, setDistDeviations] = useState(0);
+  const [distTotalTransfers, setDistTotalTransfers] = useState(0);
+
   // Modal & QR specific states
   const [mintedBatchId, setMintedBatchId] = useState(null);
   const [showScanner, setShowScanner] = useState(false);
   const [scanTarget, setScanTarget] = useState(""); // "verify" or "transfer"
   const [showWalletPicker, setShowWalletPicker] = useState(false);
+  const [wrongNetwork, setWrongNetwork] = useState(false);
+  const HARDHAT_CHAIN_ID = "0x7a69"; // 31337 in hex
 
   // EIP-6963: modern wallet discovery (MetaMask, Coinbase, etc.)
   const [eip6963Wallets, setEip6963Wallets] = useState([]);
@@ -249,8 +268,46 @@ export default function App() {
       }
       setWalletName(connectedWalletName);
 
+      // Auto-switch to Hardhat localhost network (chainId 31337 = 0x7a69)
+      try {
+        await injectedProvider.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: HARDHAT_CHAIN_ID }],
+        });
+      } catch (switchError) {
+        // 4902 = chain not added to MetaMask yet
+        if (switchError.code === 4902 || switchError?.data?.originalError?.code === 4902) {
+          try {
+            await injectedProvider.request({
+              method: "wallet_addEthereumChain",
+              params: [{
+                chainId: HARDHAT_CHAIN_ID,
+                chainName: "Hardhat Localhost",
+                nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+                rpcUrls: ["http://127.0.0.1:8545"],
+              }],
+            });
+          } catch (addError) {
+            console.error("Failed to add Hardhat network:", addError);
+          }
+        } else {
+          console.error("Failed to switch network:", switchError);
+        }
+      }
+
+      // Re-create provider after potential chain switch
       const provider = new ethers.BrowserProvider(injectedProvider);
       const network = await provider.getNetwork();
+      const currentChainId = "0x" + network.chainId.toString(16);
+
+      // Verify we're now on the correct chain
+      if (currentChainId !== HARDHAT_CHAIN_ID) {
+        setWrongNetwork(true);
+        setProvider(provider);
+        setAccount(accounts[0]);
+        return;
+      }
+      setWrongNetwork(false);
 
       const signer = await provider.getSigner(accounts[0]);
       const addr = await signer.getAddress();
@@ -267,6 +324,20 @@ export default function App() {
       } catch {
         console.log("No role assigned");
       }
+      // Fetch batch counts
+      try {
+        const total = await pContract.batchCount();
+        const active = await pContract.getActiveBatchCount();
+        setTotalBatchCount(Number(total));
+        setActiveBatchCountState(Number(active));
+      } catch { /* contract may not support yet */ }
+      // Fetch distributor compliance stats
+      try {
+        const dev = await pContract.getDeviationCount(addr);
+        const tot = await pContract.getTotalTransfers(addr);
+        setDistDeviations(Number(dev));
+        setDistTotalTransfers(Number(tot));
+      } catch {}
     } catch (err) {
       setProvider(null);
       setAccount("");
@@ -301,6 +372,20 @@ export default function App() {
       } catch {
         console.log("No role assigned");
       }
+      // Fetch batch counts
+      try {
+        const total = await pContract.batchCount();
+        const active = await pContract.getActiveBatchCount();
+        setTotalBatchCount(Number(total));
+        setActiveBatchCountState(Number(active));
+      } catch { /* contract may not support yet */ }
+      // Fetch distributor compliance stats
+      try {
+        const dev = await pContract.getDeviationCount(addr);
+        const tot = await pContract.getTotalTransfers(addr);
+        setDistDeviations(Number(dev));
+        setDistTotalTransfers(Number(tot));
+      } catch {}
       setView("industry");
       setPassAuth(true);
     } catch (e) { console.error(e); alert("Failed Hardhat Demo. Is it running?"); }
@@ -356,12 +441,22 @@ export default function App() {
     if (!contract) return;
     try {
       const newId = "BCH-" + crypto.getRandomValues(new Uint32Array(1))[0].toString(16).toUpperCase().padStart(8, '0');
-      const tx = await contract.createBatch(newId, batchName, expiry, location);
+      const distAddr = expectedDistributor.trim() || ethers.ZeroAddress;
+      const retAddr = expectedRetailer.trim() || ethers.ZeroAddress;
+      const tx = await contract.createBatch(newId, batchName, expiry, location, distAddr, retAddr);
       await tx.wait();
       
       setMintedBatchId(newId);
       
-      setBatchName(""); setExpiry(""); setLocation("");
+      // Refresh batch counts
+      try {
+        const total = await contract.batchCount();
+        const active = await contract.getActiveBatchCount();
+        setTotalBatchCount(Number(total));
+        setActiveBatchCountState(Number(active));
+      } catch {}
+      
+      setBatchName(""); setExpiry(""); setLocation(""); setExpectedDistributor(""); setExpectedRetailer("");
     } catch (err) {
       console.error(err);
       alert(err.code === 4001 ? "Transaction cancelled." : "Error creating batch. Check console for details.");
@@ -371,11 +466,27 @@ export default function App() {
   const transferBatch = async (e) => {
     e.preventDefault();
     if (!contract) return;
+    setTransferError("");
     try {
       const cleanId = transferId.toUpperCase().trim();
+      // Pre-flight: check if batch is still active
+      try {
+        const isActive = await contract.isBatchActive(cleanId);
+        if (!isActive) {
+          setTransferError("This batch is deactivated (Lost/Recalled/Rejected) and cannot be transferred.");
+          return;
+        }
+      } catch {}
       const tx = await contract.transferOwnership(cleanId, transferTo, transferStatus, transferLoc);
       await tx.wait();
-      alert("Batch Transfer Recorded Immaculately!");
+      // Refresh compliance stats
+      try {
+        const dev = await contract.getDeviationCount(account);
+        const tot = await contract.getTotalTransfers(account);
+        setDistDeviations(Number(dev));
+        setDistTotalTransfers(Number(tot));
+      } catch {}
+      alert("Batch Transfer Recorded!");
       setTransferId(""); setTransferTo(""); setTransferLoc("");
     } catch (err) {
       console.error(err);
@@ -387,11 +498,27 @@ export default function App() {
   const transferBatchRet = async (e) => {
     e.preventDefault();
     if (!contract) return;
+    setRetTransferError("");
     try {
       const cleanId = retTransferId.toUpperCase().trim();
+      // Pre-flight: check if batch is still active
+      try {
+        const isActive = await contract.isBatchActive(cleanId);
+        if (!isActive) {
+          setRetTransferError("This batch is deactivated (Lost/Recalled/Rejected) and cannot be transferred.");
+          return;
+        }
+      } catch {}
       const tx = await contract.transferOwnership(cleanId, retTransferTo, retTransferStatus, retTransferLoc);
       await tx.wait();
-      alert("Batch Transfer Recorded Immaculately!");
+      // Refresh compliance stats
+      try {
+        const dev = await contract.getDeviationCount(account);
+        const tot = await contract.getTotalTransfers(account);
+        setDistDeviations(Number(dev));
+        setDistTotalTransfers(Number(tot));
+      } catch {}
+      alert("Batch Transfer Recorded!");
       setRetTransferId(""); setRetTransferTo(""); setRetTransferLoc("");
     } catch (err) {
       console.error(err);
@@ -406,7 +533,7 @@ export default function App() {
     // Fallback to a read-only provider if wallet isn't connected (for Customers)
     let readContract = contract;
     if (!readContract) {
-      const readProvider = new ethers.JsonRpcProvider("https://ethereum-sepolia-rpc.publicnode.com");
+      const readProvider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
       readContract = new ethers.Contract(contractAddress, contractABI, readProvider);
     }
 
@@ -416,10 +543,16 @@ export default function App() {
       const history = await readContract.getBatchHistory(idToVerify);
       setBatchInfo(data);
       setBatchHistory(history);
+      // Fetch expected route
+      try {
+        const route = await readContract.getExpectedRoute(idToVerify);
+        setBatchExpectedRoute({ distributor: route[0], retailer: route[1] });
+      } catch { setBatchExpectedRoute(null); }
     } catch (err) {
       console.error(err);
       alert("Batch not found on Blockchain.");
       setBatchInfo(null);
+      setBatchExpectedRoute(null);
     }
   };
 
@@ -585,6 +718,47 @@ export default function App() {
         </div>
       )}
 
+      {/* WRONG NETWORK BANNER */}
+      {wrongNetwork && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl p-10 w-full max-w-md text-center">
+            <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
+              <AlertTriangle className="w-10 h-10 text-red-600" />
+            </div>
+            <h3 className="text-2xl font-bold text-slate-800 mb-3">Wrong Network</h3>
+            <p className="text-slate-500 mb-2">PharmaChain requires the <strong>Hardhat Localhost</strong> network.</p>
+            <p className="text-slate-400 text-sm mb-8">Please switch MetaMask to the Hardhat Localhost network (Chain ID: 31337, RPC: http://127.0.0.1:8545).</p>
+            <button
+              onClick={async () => {
+                try {
+                  const allOptions = [...eip6963Wallets, ...getLegacyWalletOptions()];
+                  const wallet = allOptions.find(w => w.id === selectedWalletId) || allOptions[0];
+                  if (!wallet) return;
+                  try {
+                    await wallet.provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: HARDHAT_CHAIN_ID }] });
+                  } catch (e) {
+                    if (e.code === 4902 || e?.data?.originalError?.code === 4902) {
+                      await wallet.provider.request({
+                        method: "wallet_addEthereumChain",
+                        params: [{ chainId: HARDHAT_CHAIN_ID, chainName: "Hardhat Localhost", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: ["http://127.0.0.1:8545"] }],
+                      });
+                    }
+                  }
+                  setWrongNetwork(false);
+                  connectWallet({ injectedProvider: wallet.provider, preferredWallet: wallet.id, walletLabel: wallet.label });
+                } catch (err) { console.error(err); }
+              }}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-xl transition-colors shadow-lg shadow-blue-500/30 text-lg mb-3"
+            >
+              Switch to Hardhat Localhost
+            </button>
+            <button onClick={() => { setWrongNetwork(false); signOut(); }} className="w-full text-slate-500 hover:text-slate-800 font-medium py-2 transition-colors">
+              Sign Out Instead
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-slate-200 py-4 px-8 flex justify-between items-center sticky top-0 z-50">
         <div className="flex items-center gap-4">
@@ -696,6 +870,13 @@ export default function App() {
                     </div>
                     <div>
                       <h2 className="text-2xl font-bold text-white tracking-wide">Industry Workspace</h2>
+                      <div className="flex items-center gap-3 mt-2">
+                        <span className="bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-xs font-bold px-3 py-1 rounded-full">{activeBatchCountState} Active</span>
+                        <span className="bg-white/10 border border-white/10 text-blue-200 text-xs font-bold px-3 py-1 rounded-full">{totalBatchCount} Total</span>
+                        {totalBatchCount - activeBatchCountState > 0 && (
+                          <span className="bg-amber-500/20 border border-amber-400/30 text-amber-300 text-xs font-bold px-3 py-1 rounded-full">{totalBatchCount - activeBatchCountState} Deactivated</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   
@@ -766,6 +947,32 @@ export default function App() {
                             <input required value={location} onChange={e=>setLocation(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition" placeholder="City, Country" />
                           </div>
                         </div>
+                        {/* Route Assignment */}
+                        <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4 space-y-3">
+                          <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest flex items-center gap-1.5">
+                            <ArrowRight className="w-3 h-3" /> Assign Supply Chain Route <span className="text-indigo-400 font-normal normal-case">(optional)</span>
+                          </p>
+                          <div>
+                            <label className="block text-xs font-medium text-slate-500 mb-1">Expected Distributor</label>
+                            <div className="flex flex-col gap-1.5">
+                              <input value={expectedDistributor} onChange={e=>setExpectedDistributor(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-400 outline-none transition text-sm" placeholder="0x... (leave blank for open route)" />
+                              <select onChange={e => {if(e.target.value) setExpectedDistributor(e.target.value)}} className="px-3 py-2 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-400 outline-none bg-white text-xs text-slate-500">
+                                <option value="">Auto-fill demo...</option>
+                                <option value="0x70997970C51812dc3A010C7d01b50e0d17dc79C8">Account #1 (Distributor)</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-slate-500 mb-1">Expected Retailer</label>
+                            <div className="flex flex-col gap-1.5">
+                              <input value={expectedRetailer} onChange={e=>setExpectedRetailer(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-400 outline-none transition text-sm" placeholder="0x... (leave blank for open route)" />
+                              <select onChange={e => {if(e.target.value) setExpectedRetailer(e.target.value)}} className="px-3 py-2 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-400 outline-none bg-white text-xs text-slate-500">
+                                <option value="">Auto-fill demo...</option>
+                                <option value="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC">Account #2 (Retailer)</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
                         <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-xl transition-colors mt-2 shadow-lg shadow-blue-600/20">
                           Mint Batch & Generate QR
                         </button>
@@ -811,6 +1018,12 @@ export default function App() {
                           <input required value={transferLoc} onChange={e=>setTransferLoc(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none transition" placeholder="Facility Name, City" />
                         </div>
                         <div className="text-[10px] text-purple-600/70 font-bold uppercase text-center mt-2 tracking-widest">Requires Manufacturer Wallet</div>
+                        {transferError && (
+                          <div className="bg-red-50 border border-red-200 rounded-xl p-3 flex items-center gap-2 mt-2">
+                            <Ban className="w-4 h-4 text-red-600 shrink-0" />
+                            <span className="text-red-700 text-sm font-medium">{transferError}</span>
+                          </div>
+                        )}
                         <button type="submit" className="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-3 rounded-xl transition-colors mt-2 shadow-lg shadow-purple-600/20">
                           Transfer
                         </button>
@@ -856,6 +1069,12 @@ export default function App() {
                           <input required value={retTransferLoc} onChange={e=>setRetTransferLoc(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition" placeholder="Facility Name, City" />
                         </div>
                         <div className="text-[10px] text-emerald-600/70 font-bold uppercase text-center mt-2 tracking-widest">Requires Distributor Wallet</div>
+                        {retTransferError && (
+                          <div className="bg-red-50 border border-red-200 rounded-xl p-3 flex items-center gap-2 mt-2">
+                            <Ban className="w-4 h-4 text-red-600 shrink-0" />
+                            <span className="text-red-700 text-sm font-medium">{retTransferError}</span>
+                          </div>
+                        )}
                         <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-3 rounded-xl transition-colors mt-2 shadow-lg shadow-emerald-600/20">
                           Transfer
                         </button>
@@ -869,7 +1088,7 @@ export default function App() {
                   <h3 className="text-xl font-bold flex items-center gap-2 mb-6 text-slate-800">
                     <ShieldCheck className="w-6 h-6 text-red-500" /> Security & Exception Handling
                   </h3>
-                  <div className="grid md:grid-cols-2 gap-8">
+                  <div className="grid md:grid-cols-3 gap-8">
                     {/* Recall Panel */}
                     <div className="bg-red-50/50 border border-red-100 rounded-2xl p-6">
                       <h4 className="font-bold text-red-700 mb-4 flex items-center gap-2">
@@ -881,7 +1100,14 @@ export default function App() {
                         try {
                           const tx = await contract.recallBatch(recallId.toUpperCase().trim(), recallReason);
                           await tx.wait();
-                          alert("Batch Recalled successfully.");
+                          alert("Batch Recalled successfully. It is now deactivated from the supply chain.");
+                          // Refresh counts
+                          try {
+                            const total = await contract.batchCount();
+                            const active = await contract.getActiveBatchCount();
+                            setTotalBatchCount(Number(total));
+                            setActiveBatchCountState(Number(active));
+                          } catch {}
                         } catch (err) { alert("Error recalling batch. Make sure you are the Origin Manufacturer."); console.error(err); }
                       }} className="space-y-4">
                         <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-red-200 focus:ring-2 focus:ring-red-500 outline-none bg-white" onChange={e=>setRecallId(e.target.value)} />
@@ -901,13 +1127,85 @@ export default function App() {
                           try {
                             const tx = await contract.reportLost(lostId.toUpperCase().trim(), lostReason);
                             await tx.wait();
-                            alert("Batch status permanently updated to Lost/Destroyed.");
+                            alert("Batch status permanently updated to Lost/Destroyed. It is now deactivated.");
+                            // Refresh counts
+                            try {
+                              const total = await contract.batchCount();
+                              const active = await contract.getActiveBatchCount();
+                              setTotalBatchCount(Number(total));
+                              setActiveBatchCountState(Number(active));
+                            } catch {}
                           } catch (err) { alert("Error reporting batch. Must be Current Holder."); console.error(err); }
                         }} className="space-y-4">
                           <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white" onChange={e=>setLostId(e.target.value)} />
                           <input required type="text" placeholder="Reason (e.g. Temperature breach)" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white" onChange={e=>setLostReason(e.target.value)} />
                           <button className="w-full bg-orange-600 hover:bg-orange-700 text-white font-medium py-3 rounded-xl transition-colors">Confirm Incident Details</button>
                         </form>
+                    </div>
+
+                    {/* Reject Batch Panel */}
+                    <div className="bg-rose-50/50 border border-rose-100 rounded-2xl p-6">
+                        <h4 className="font-bold text-rose-700 mb-4 flex items-center gap-2">
+                          <XCircle className="w-5 h-5" /> Reject Batch (Quality Failure)
+                        </h4>
+                        <form onSubmit={async (e) => {
+                          e.preventDefault();
+                          if(!contract) return;
+                          try {
+                            const tx = await contract.rejectBatch(rejectId.toUpperCase().trim(), rejectReason);
+                            await tx.wait();
+                            alert("Batch rejected and permanently deactivated from the supply chain.");
+                            // Refresh counts
+                            try {
+                              const total = await contract.batchCount();
+                              const active = await contract.getActiveBatchCount();
+                              setTotalBatchCount(Number(total));
+                              setActiveBatchCountState(Number(active));
+                            } catch {}
+                          } catch (err) { alert("Error rejecting batch. Must be Current Holder or Admin."); console.error(err); }
+                        }} className="space-y-4">
+                          <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-rose-200 focus:ring-2 focus:ring-rose-500 outline-none bg-white" onChange={e=>setRejectId(e.target.value)} />
+                          <input required type="text" placeholder="Reason (e.g. Failed lab test)" className="w-full px-4 py-3 rounded-xl border border-rose-200 focus:ring-2 focus:ring-rose-500 outline-none bg-white" onChange={e=>setRejectReason(e.target.value)} />
+                          <button className="w-full bg-rose-600 hover:bg-rose-700 text-white font-medium py-3 rounded-xl transition-colors">Reject & Deactivate</button>
+                        </form>
+                    </div>
+                  </div>
+                </div>
+
+                {/* --- Route Compliance Monitor --- */}
+                <div className="mt-8 bg-gradient-to-br from-indigo-900 via-slate-900 to-slate-900 rounded-3xl p-8 border border-indigo-800/50 shadow-2xl overflow-hidden relative">
+                  <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500 opacity-5 blur-[100px] rounded-full"></div>
+                  <h3 className="text-xl font-bold flex items-center gap-2 mb-6 text-white relative z-10">
+                    <Building2 className="w-6 h-6 text-indigo-400" /> Route Compliance Monitor
+                  </h3>
+                  <div className="grid md:grid-cols-4 gap-6 relative z-10">
+                    <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-6 text-center">
+                      <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Transfers (You)</p>
+                      <p className="text-3xl font-bold text-white">{distTotalTransfers}</p>
+                    </div>
+                    <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-6 text-center">
+                      <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Route Deviations</p>
+                      <p className={`text-3xl font-bold ${distDeviations > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{distDeviations}</p>
+                    </div>
+                    <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-6 text-center">
+                      <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Compliance Score</p>
+                      <p className={`text-3xl font-bold ${distTotalTransfers === 0 ? 'text-slate-500' : (distDeviations === 0 ? 'text-emerald-400' : (distDeviations / distTotalTransfers < 0.1 ? 'text-amber-400' : 'text-red-400'))}`}>
+                        {distTotalTransfers === 0 ? '—' : `${Math.round(((distTotalTransfers - distDeviations) / distTotalTransfers) * 100)}%`}
+                      </p>
+                    </div>
+                    <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-6 flex flex-col items-center justify-center">
+                      <div className={`w-16 h-16 rounded-full border-4 flex items-center justify-center ${distTotalTransfers === 0 ? 'border-slate-600' : (distDeviations === 0 ? 'border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]' : 'border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)]')}`}>
+                        {distTotalTransfers === 0 ? (
+                          <span className="text-slate-500 text-xs font-bold">N/A</span>
+                        ) : distDeviations === 0 ? (
+                          <CheckCircle2 className="w-8 h-8 text-emerald-400" />
+                        ) : (
+                          <AlertTriangle className="w-8 h-8 text-amber-400" />
+                        )}
+                      </div>
+                      <p className={`text-xs font-bold mt-2 uppercase tracking-wider ${distTotalTransfers === 0 ? 'text-slate-500' : (distDeviations === 0 ? 'text-emerald-400' : 'text-amber-400')}`}>
+                        {distTotalTransfers === 0 ? 'No Data' : (distDeviations === 0 ? 'Compliant' : 'Flagged')}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -930,9 +1228,15 @@ export default function App() {
                           <p className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Internal Record</p>
                           <h4 className="text-4xl font-bold text-white mb-4">{batchInfo.medicineName}</h4>
                           <div className="flex flex-wrap items-center gap-3">
-                            <div className="flex items-center gap-2 text-cyan-400 font-medium bg-cyan-400/10 border border-cyan-400/20 px-4 py-1.5 rounded-full text-sm">
-                              <CheckCircle2 className="w-4 h-4" /> Validated Entry
-                            </div>
+                            {[3,5,6].includes(Number(batchInfo.status)) ? (
+                              <div className="flex items-center gap-2 text-red-400 font-medium bg-red-400/10 border border-red-400/20 px-4 py-1.5 rounded-full text-sm">
+                                <Ban className="w-4 h-4" /> Deactivated — {STATUS[Number(batchInfo.status)]}
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2 text-cyan-400 font-medium bg-cyan-400/10 border border-cyan-400/20 px-4 py-1.5 rounded-full text-sm">
+                                <CheckCircle2 className="w-4 h-4" /> Validated Entry
+                              </div>
+                            )}
                             <div className="flex items-center gap-2 text-slate-300 font-medium bg-slate-700 border border-slate-600 px-4 py-1.5 rounded-full text-sm">
                               ID: #{batchInfo.batchId.toString()}
                             </div>
@@ -952,6 +1256,22 @@ export default function App() {
                             <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Current Owner Address</span>
                             <span className="text-emerald-400 font-mono text-sm break-all">{batchInfo.currentOwner}</span>
                           </div>
+                          {batchExpectedRoute && (batchExpectedRoute.distributor !== ethers.ZeroAddress || batchExpectedRoute.retailer !== ethers.ZeroAddress) && (
+                            <div className="col-span-2 mt-2 bg-indigo-950/30 border border-indigo-500/20 rounded-xl p-4">
+                              <span className="block text-indigo-400 text-xs font-bold uppercase tracking-wider mb-2">Assigned Route</span>
+                              <div className="flex flex-wrap gap-2 items-center">
+                                <span className="text-slate-400 text-xs font-bold">MFR</span>
+                                <ArrowRight className="w-3 h-3 text-slate-600" />
+                                <span className={`text-xs font-mono px-2 py-1 rounded-lg border ${batchExpectedRoute.distributor !== ethers.ZeroAddress ? 'bg-amber-500/10 border-amber-500/30 text-amber-300' : 'bg-slate-700 border-slate-600 text-slate-400'}`}>
+                                  {batchExpectedRoute.distributor !== ethers.ZeroAddress ? `${batchExpectedRoute.distributor.slice(0,6)}...${batchExpectedRoute.distributor.slice(-4)}` : 'Open'}
+                                </span>
+                                <ArrowRight className="w-3 h-3 text-slate-600" />
+                                <span className={`text-xs font-mono px-2 py-1 rounded-lg border ${batchExpectedRoute.retailer !== ethers.ZeroAddress ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-slate-700 border-slate-600 text-slate-400'}`}>
+                                  {batchExpectedRoute.retailer !== ethers.ZeroAddress ? `${batchExpectedRoute.retailer.slice(0,6)}...${batchExpectedRoute.retailer.slice(-4)}` : 'Open'}
+                                </span>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -975,15 +1295,23 @@ export default function App() {
                                   <div className="absolute top-6 left-[50%] w-full h-1 bg-gradient-to-r from-blue-500 to-slate-700 -z-10" />
                                 )}
                                 
-                                <div className="flex items-center justify-center w-14 h-14 rounded-full border-4 border-slate-800 bg-blue-600 text-white shadow-[0_0_20px_rgba(37,99,235,0.6)] z-10 hover:scale-110 transition-transform">
-                                  {idx === 0 ? <Settings className="w-6 h-6"/> : <ArrowRight className="w-6 h-6"/>}
-                                </div>
+                                {(() => {
+                                  const evStatus = Number(event.status);
+                                  const isTerminal = evStatus === 3 || evStatus === 5 || evStatus === 6;
+                                  const isDeviation = event.notes && event.notes.startsWith("ROUTE DEVIATION");
+                                  const nodeClass = isTerminal ? 'bg-red-600 shadow-[0_0_20px_rgba(220,38,38,0.6)]' : isDeviation ? 'bg-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.6)]' : 'bg-blue-600 shadow-[0_0_20px_rgba(37,99,235,0.6)]';
+                                  return (
+                                    <div className={`flex items-center justify-center w-14 h-14 rounded-full border-4 border-slate-800 text-white z-10 hover:scale-110 transition-transform ${nodeClass}`}>
+                                      {isTerminal ? <Ban className="w-6 h-6"/> : isDeviation ? <AlertTriangle className="w-6 h-6"/> : (idx === 0 ? <Settings className="w-6 h-6"/> : <ArrowRight className="w-6 h-6"/>)}
+                                    </div>
+                                  );
+                                })()}
                                 
                                 <div className="mt-8 bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl hover:-translate-y-2 transition-transform w-full relative">
                                   <div className="absolute -top-3 left-[50%] -translate-x-[50%] w-6 h-6 bg-slate-800 border-t border-l border-slate-700 rotate-45 transform"></div>
                                   
                                   <div className="flex justify-between items-start mb-4 relative z-10">
-                                    <span className="text-blue-400 font-bold text-lg">{STATUS[Number(event.status)]}</span>
+                                    <span className={`font-bold text-lg ${[3,5,6].includes(Number(event.status)) ? 'text-red-400' : (event.notes && event.notes.startsWith('ROUTE DEVIATION') ? 'text-amber-400' : 'text-blue-400')}`}>{STATUS[Number(event.status)]}{event.notes && event.notes.startsWith('ROUTE DEVIATION') ? ' ⚠️' : ''}</span>
                                     <span className="text-slate-400 text-xs font-medium bg-slate-900 px-3 py-1 rounded-full whitespace-nowrap">{new Date(Number(event.timestamp) * 1000).toLocaleString()}</span>
                                   </div>
                                   
@@ -1000,6 +1328,19 @@ export default function App() {
                                       {event.to}
                                     </p>
                                   </div>
+                                  {event.notes && (
+                                    event.notes.startsWith("ROUTE DEVIATION") ? (
+                                      <div className="bg-amber-900/30 border border-amber-500/30 p-3 rounded-xl mt-3 relative z-10">
+                                        <span className="text-amber-400 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Route Deviation</span>
+                                        <p className="text-amber-300 text-sm mt-1">{event.notes}</p>
+                                      </div>
+                                    ) : (
+                                      <div className="bg-red-900/30 border border-red-500/30 p-3 rounded-xl mt-3 relative z-10">
+                                        <span className="text-red-400 text-xs font-bold uppercase tracking-wider">Reason:</span>
+                                        <p className="text-red-300 text-sm mt-1">{event.notes}</p>
+                                      </div>
+                                    )
+                                  )}
                                 </div>
                               </div>
                             )})}
@@ -1035,16 +1376,59 @@ export default function App() {
               </form>
             </div>
 
-            {batchInfo && (
+            {batchInfo && (() => {
+              const statusNum = Number(batchInfo.status);
+              const isDeactivated = statusNum === 3 || statusNum === 5 || statusNum === 6;
+              const deactivationMessages = {
+                3: { label: "RECALLED", msg: "This batch has been recalled by the manufacturer. Do not use this product.", color: "red" },
+                5: { label: "LOST", msg: "This batch has been reported as lost or destroyed. It is no longer valid in the supply chain.", color: "amber" },
+                6: { label: "REJECTED", msg: "This batch was rejected due to quality failure. This product should not be consumed.", color: "rose" },
+              };
+              const deactivation = deactivationMessages[statusNum];
+              return (
               <div className="bg-slate-800 border-t border-slate-700 p-8 md:p-12">
+                {isDeactivated && deactivation && (
+                  <div className={`mb-8 p-6 rounded-2xl border-2 flex items-start gap-4 ${
+                    deactivation.color === "red" ? "bg-red-950/50 border-red-500/50" :
+                    deactivation.color === "amber" ? "bg-amber-950/50 border-amber-500/50" :
+                    "bg-rose-950/50 border-rose-500/50"
+                  }`}>
+                    <div className={`p-3 rounded-full shrink-0 ${
+                      deactivation.color === "red" ? "bg-red-500/20" :
+                      deactivation.color === "amber" ? "bg-amber-500/20" :
+                      "bg-rose-500/20"
+                    }`}>
+                      <Ban className={`w-8 h-8 ${
+                        deactivation.color === "red" ? "text-red-400" :
+                        deactivation.color === "amber" ? "text-amber-400" :
+                        "text-rose-400"
+                      }`} />
+                    </div>
+                    <div>
+                      <h4 className={`text-xl font-bold mb-1 ${
+                        deactivation.color === "red" ? "text-red-400" :
+                        deactivation.color === "amber" ? "text-amber-400" :
+                        "text-rose-400"
+                      }`}>⚠️ BATCH {deactivation.label}</h4>
+                      <p className="text-slate-300 text-sm">{deactivation.msg}</p>
+                      <p className="text-slate-500 text-xs mt-2">This batch has been permanently deactivated and removed from the active supply chain. The data below is preserved as a historical record.</p>
+                    </div>
+                  </div>
+                )}
                 <div className="flex flex-col lg:flex-row gap-8 justify-between items-start">
                   <div className="flex-1">
                     <p className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Medicine Detail</p>
                     <h4 className="text-4xl font-bold text-white mb-4">{batchInfo.medicineName}</h4>
                     <div className="flex flex-wrap items-center gap-3">
-                      <div className="flex items-center gap-2 text-cyan-400 font-medium bg-cyan-400/10 border border-cyan-400/20 px-4 py-1.5 rounded-full text-sm">
-                        <CheckCircle2 className="w-4 h-4" /> Authenticity Verified
-                      </div>
+                      {isDeactivated ? (
+                        <div className="flex items-center gap-2 text-red-400 font-medium bg-red-400/10 border border-red-400/20 px-4 py-1.5 rounded-full text-sm">
+                          <Ban className="w-4 h-4" /> Deactivated — {STATUS[statusNum]}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-cyan-400 font-medium bg-cyan-400/10 border border-cyan-400/20 px-4 py-1.5 rounded-full text-sm">
+                          <CheckCircle2 className="w-4 h-4" /> Authenticity Verified
+                        </div>
+                      )}
                       <div className="flex items-center gap-2 text-slate-300 font-medium bg-slate-700 border border-slate-600 px-4 py-1.5 rounded-full text-sm">
                         ID: #{batchInfo.batchId.toString()}
                       </div>
@@ -1064,6 +1448,22 @@ export default function App() {
                       <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Current Owner Address</span>
                       <span className="text-emerald-400 font-mono text-sm break-all">{batchInfo.currentOwner}</span>
                     </div>
+                    {batchExpectedRoute && (batchExpectedRoute.distributor !== ethers.ZeroAddress || batchExpectedRoute.retailer !== ethers.ZeroAddress) && (
+                      <div className="col-span-2 mt-2 bg-indigo-950/30 border border-indigo-500/20 rounded-xl p-4">
+                        <span className="block text-indigo-400 text-xs font-bold uppercase tracking-wider mb-2">Assigned Route</span>
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <span className="text-slate-400 text-xs font-bold">MFR</span>
+                          <ArrowRight className="w-3 h-3 text-slate-600" />
+                          <span className={`text-xs font-mono px-2 py-1 rounded-lg border ${batchExpectedRoute.distributor !== ethers.ZeroAddress ? 'bg-amber-500/10 border-amber-500/30 text-amber-300' : 'bg-slate-700 border-slate-600 text-slate-400'}`}>
+                            {batchExpectedRoute.distributor !== ethers.ZeroAddress ? `${batchExpectedRoute.distributor.slice(0,6)}...${batchExpectedRoute.distributor.slice(-4)}` : 'Open'}
+                          </span>
+                          <ArrowRight className="w-3 h-3 text-slate-600" />
+                          <span className={`text-xs font-mono px-2 py-1 rounded-lg border ${batchExpectedRoute.retailer !== ethers.ZeroAddress ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-slate-700 border-slate-600 text-slate-400'}`}>
+                            {batchExpectedRoute.retailer !== ethers.ZeroAddress ? `${batchExpectedRoute.retailer.slice(0,6)}...${batchExpectedRoute.retailer.slice(-4)}` : 'Open'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1087,15 +1487,23 @@ export default function App() {
                             <div className="absolute top-6 left-[50%] w-full h-1 bg-gradient-to-r from-blue-500 to-slate-700 -z-10" />
                           )}
                           
-                          <div className="flex items-center justify-center w-14 h-14 rounded-full border-4 border-slate-800 bg-blue-600 text-white shadow-[0_0_20px_rgba(37,99,235,0.6)] z-10 hover:scale-110 transition-transform">
-                            {idx === 0 ? <Settings className="w-6 h-6"/> : <ArrowRight className="w-6 h-6"/>}
-                          </div>
+                          {(() => {
+                            const evStatus = Number(event.status);
+                            const isTerminal = evStatus === 3 || evStatus === 5 || evStatus === 6;
+                            const isDeviation = event.notes && event.notes.startsWith("ROUTE DEVIATION");
+                            const nodeClass = isTerminal ? 'bg-red-600 shadow-[0_0_20px_rgba(220,38,38,0.6)]' : isDeviation ? 'bg-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.6)]' : 'bg-blue-600 shadow-[0_0_20px_rgba(37,99,235,0.6)]';
+                            return (
+                              <div className={`flex items-center justify-center w-14 h-14 rounded-full border-4 border-slate-800 text-white z-10 hover:scale-110 transition-transform ${nodeClass}`}>
+                                {isTerminal ? <Ban className="w-6 h-6"/> : isDeviation ? <AlertTriangle className="w-6 h-6"/> : (idx === 0 ? <Settings className="w-6 h-6"/> : <ArrowRight className="w-6 h-6"/>)}
+                              </div>
+                            );
+                          })()}
                           
                           <div className="mt-8 bg-slate-800 border border-slate-700 p-6 rounded-2xl shadow-xl hover:-translate-y-2 transition-transform w-full relative">
                             <div className="absolute -top-3 left-[50%] -translate-x-[50%] w-6 h-6 bg-slate-800 border-t border-l border-slate-700 rotate-45 transform"></div>
                             
                             <div className="flex justify-between items-start mb-4 relative z-10">
-                              <span className="text-blue-400 font-bold text-lg">{STATUS[Number(event.status)]}</span>
+                              <span className={`font-bold text-lg ${[3,5,6].includes(Number(event.status)) ? 'text-red-400' : (event.notes && event.notes.startsWith('ROUTE DEVIATION') ? 'text-amber-400' : 'text-blue-400')}`}>{STATUS[Number(event.status)]}{event.notes && event.notes.startsWith('ROUTE DEVIATION') ? ' ⚠️' : ''}</span>
                               <span className="text-slate-400 text-xs font-medium bg-slate-900 px-3 py-1 rounded-full whitespace-nowrap">{new Date(Number(event.timestamp) * 1000).toLocaleString()}</span>
                             </div>
                             
@@ -1112,6 +1520,19 @@ export default function App() {
                                 {event.to}
                               </p>
                             </div>
+                            {event.notes && (
+                              event.notes.startsWith("ROUTE DEVIATION") ? (
+                                <div className="bg-amber-900/30 border border-amber-500/30 p-3 rounded-xl mt-3 relative z-10">
+                                  <span className="text-amber-400 text-xs font-bold uppercase tracking-wider flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Route Deviation</span>
+                                  <p className="text-amber-300 text-sm mt-1">{event.notes}</p>
+                                </div>
+                              ) : (
+                                <div className="bg-red-900/30 border border-red-500/30 p-3 rounded-xl mt-3 relative z-10">
+                                  <span className="text-red-400 text-xs font-bold uppercase tracking-wider">Reason:</span>
+                                  <p className="text-red-300 text-sm mt-1">{event.notes}</p>
+                                </div>
+                              )
+                            )}
                           </div>
                         </div>
                       )})}
@@ -1119,7 +1540,8 @@ export default function App() {
                   </div>
                 )}
               </div>
-            )}
+              );
+            })()}
           </div>
         )}
       </main>

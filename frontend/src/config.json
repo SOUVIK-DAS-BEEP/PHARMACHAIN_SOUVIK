@@ -41,6 +41,37 @@
           "type": "string"
         },
         {
+          "indexed": false,
+          "internalType": "enum PharmaTracking.Status",
+          "name": "terminalStatus",
+          "type": "uint8"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "deactivatedBy",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "reason",
+          "type": "string"
+        }
+      ],
+      "name": "BatchDeactivated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "batchId",
+          "type": "string"
+        },
+        {
           "indexed": true,
           "internalType": "address",
           "name": "reportedBy",
@@ -185,6 +216,37 @@
       "anonymous": false,
       "inputs": [
         {
+          "indexed": false,
+          "internalType": "string",
+          "name": "batchId",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "expected",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "actual",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "sender",
+          "type": "address"
+        }
+      ],
+      "name": "RouteDeviation",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
           "indexed": true,
           "internalType": "address",
           "name": "user",
@@ -199,6 +261,19 @@
       ],
       "name": "UserRegistered",
       "type": "event"
+    },
+    {
+      "inputs": [],
+      "name": "activeBatchCount",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
     },
     {
       "inputs": [],
@@ -316,6 +391,16 @@
           "internalType": "bool",
           "name": "exists",
           "type": "bool"
+        },
+        {
+          "internalType": "address",
+          "name": "expectedDistributor",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "expectedRetailer",
+          "type": "address"
         }
       ],
       "stateMutability": "view",
@@ -342,11 +427,53 @@
           "internalType": "string",
           "name": "_location",
           "type": "string"
+        },
+        {
+          "internalType": "address",
+          "name": "_expectedDistributor",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "_expectedRetailer",
+          "type": "address"
         }
       ],
       "name": "createBatch",
       "outputs": [],
       "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "deviationCount",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getActiveBatchCount",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
       "type": "function"
     },
     {
@@ -405,6 +532,16 @@
               "internalType": "bool",
               "name": "exists",
               "type": "bool"
+            },
+            {
+              "internalType": "address",
+              "name": "expectedDistributor",
+              "type": "address"
+            },
+            {
+              "internalType": "address",
+              "name": "expectedRetailer",
+              "type": "address"
             }
           ],
           "internalType": "struct PharmaTracking.Batch",
@@ -467,6 +604,49 @@
       "type": "function"
     },
     {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_user",
+          "type": "address"
+        }
+      ],
+      "name": "getDeviationCount",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        }
+      ],
+      "name": "getExpectedRoute",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "expectedDistributor",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "expectedRetailer",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
       "inputs": [],
       "name": "getMyRole",
       "outputs": [
@@ -474,6 +654,44 @@
           "internalType": "enum PharmaTracking.Role",
           "name": "",
           "type": "uint8"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "_user",
+          "type": "address"
+        }
+      ],
+      "name": "getTotalTransfers",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        }
+      ],
+      "name": "isBatchActive",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
         }
       ],
       "stateMutability": "view",
@@ -541,9 +759,46 @@
           "type": "string"
         }
       ],
+      "name": "rejectBatch",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "_reason",
+          "type": "string"
+        }
+      ],
       "name": "reportLost",
       "outputs": [],
       "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "totalTransfersHandled",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
       "type": "function"
     },
     {
