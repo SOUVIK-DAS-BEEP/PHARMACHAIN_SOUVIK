@@ -1,5 +1,5 @@
 {
-  "contractAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+  "contractAddress": "0x1291Be112d480055DaFd8a610b7d1e203891C274",
   "abi": [
     {
       "inputs": [],
@@ -123,6 +123,37 @@
         }
       ],
       "name": "BatchSold",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "parentBatchId",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "subBatchId",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "index",
+          "type": "uint256"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "splitBy",
+          "type": "address"
+        }
+      ],
+      "name": "BatchSplit",
       "type": "event"
     },
     {
@@ -316,6 +347,11 @@
           "internalType": "bool",
           "name": "exists",
           "type": "bool"
+        },
+        {
+          "internalType": "string",
+          "name": "parentBatchId",
+          "type": "string"
         }
       ],
       "stateMutability": "view",
@@ -405,6 +441,11 @@
               "internalType": "bool",
               "name": "exists",
               "type": "bool"
+            },
+            {
+              "internalType": "string",
+              "name": "parentBatchId",
+              "type": "string"
             }
           ],
           "internalType": "struct PharmaTracking.Batch",
@@ -480,6 +521,43 @@
       "type": "function"
     },
     {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        }
+      ],
+      "name": "getSubBatches",
+      "outputs": [
+        {
+          "internalType": "string[]",
+          "name": "",
+          "type": "string[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "_location",
+          "type": "string"
+        }
+      ],
+      "name": "markAsSold",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
       "inputs": [],
       "name": "owner",
       "outputs": [
@@ -544,6 +622,58 @@
       "name": "reportLost",
       "outputs": [],
       "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_parentBatchId",
+          "type": "string"
+        },
+        {
+          "internalType": "uint256",
+          "name": "_count",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "_receiver",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "_location",
+          "type": "string"
+        }
+      ],
+      "name": "splitBatch",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "name": "subBatchIds",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
       "type": "function"
     },
     {

@@ -15,6 +15,7 @@ contract PharmaTracking {
         address currentOwner;
         Status status;
         bool exists;
+        string parentBatchId;   // empty for original batches, set for sub-batches
     }
 
     struct HistoryItem {
@@ -32,6 +33,7 @@ contract PharmaTracking {
     mapping(address => Role) public users;
     mapping(string => Batch) public batches;
     mapping(string => HistoryItem[]) public batchHistory;
+    mapping(string => string[]) public subBatchIds; // parent -> children
 
     event UserRegistered(address indexed user, Role role);
     event BatchCreated(string batchId, string medicineName, address indexed manufacturer);
@@ -41,6 +43,7 @@ contract PharmaTracking {
     event BatchSold(string batchId, address indexed soldBy);
     event BatchLost(string batchId, address indexed reportedBy, string reason);
     event FraudAlert(string batchId, uint256 scanCount, address scanner);
+    event BatchSplit(string parentBatchId, string subBatchId, uint256 index, address indexed splitBy);
 
     // ── Modifiers ──────────────────────────────────────────────────────
     modifier onlyOwner() {
@@ -86,7 +89,8 @@ contract PharmaTracking {
             manufacturer: msg.sender,
             currentOwner: msg.sender,
             status: Status.Manufactured,
-            exists: true
+            exists: true,
+            parentBatchId: ""
         });
 
         batchHistory[_batchId].push(HistoryItem({
@@ -109,6 +113,7 @@ contract PharmaTracking {
         require(users[_to] != Role.None, "Receiver must have a registered role");
         require(batches[_batchId].status != Status.Recalled, "Batch has been recalled");
         require(batches[_batchId].status != Status.Lost, "Batch reported as lost");
+        require(batches[_batchId].status != Status.Sold, "Fraud Alert: Batch already sold");
 
         address previousOwner = batches[_batchId].currentOwner;
 
@@ -126,6 +131,77 @@ contract PharmaTracking {
         }));
 
         emit BatchTransferred(_batchId, previousOwner, _to, _newStatus);
+    }
+
+    // ── Split Batch into Sub-Batches ──────────────────────────────────
+    function splitBatch(
+        string memory _parentBatchId,
+        uint256 _count,
+        address _receiver,
+        string memory _location
+    ) public {
+        require(batches[_parentBatchId].exists, "Parent batch does not exist");
+        require(batches[_parentBatchId].status != Status.Recalled, "Batch has been recalled");
+        require(batches[_parentBatchId].status != Status.Lost, "Batch reported as lost");
+        require(batches[_parentBatchId].status != Status.Sold, "Fraud Alert: Batch already sold");
+        require(_count > 0 && _count <= 50, "Split count must be 1-50");
+        require(users[_receiver] != Role.None, "Receiver must have a registered role");
+
+        Batch memory parent = batches[_parentBatchId];
+
+        for (uint256 i = 1; i <= _count; i++) {
+            string memory subId = string(abi.encodePacked(_parentBatchId, "-S", _uint2str(i)));
+
+            require(!batches[subId].exists, "Sub-batch ID collision");
+
+            batchCount++;
+            batches[subId] = Batch({
+                batchId: subId,
+                medicineName: parent.medicineName,
+                timestamp: block.timestamp,
+                expiryDate: parent.expiryDate,
+                location: _location,
+                manufacturer: parent.manufacturer,
+                currentOwner: _receiver,
+                status: Status.InTransit,
+                exists: true,
+                parentBatchId: _parentBatchId
+            });
+
+            batchHistory[subId].push(HistoryItem({
+                from: msg.sender,
+                to: _receiver,
+                timestamp: block.timestamp,
+                status: Status.InTransit,
+                location: _location,
+                notes: string(abi.encodePacked("Split from parent batch: ", _parentBatchId))
+            }));
+
+            subBatchIds[_parentBatchId].push(subId);
+
+            emit BatchSplit(_parentBatchId, subId, i, msg.sender);
+        }
+    }
+
+    // ── Retailer: Mark As Sold (Point of Sale) ─────────────────────────
+    function markAsSold(string memory _batchId, string memory _location) public {
+        require(batches[_batchId].exists, "Batch does not exist");
+        require(batches[_batchId].status != Status.Lost, "Batch reported as lost");
+        require(batches[_batchId].status != Status.Recalled, "Batch has been recalled");
+        require(batches[_batchId].status != Status.Sold, "Fraud Alert: Batch already sold");
+        
+        batches[_batchId].status = Status.Sold;
+        
+        batchHistory[_batchId].push(HistoryItem({
+            from: batches[_batchId].currentOwner,
+            to: address(0), 
+            timestamp: block.timestamp,
+            status: Status.Sold,
+            location: _location,
+            notes: "Final Sale to Consumer"
+        }));
+
+        emit BatchSold(_batchId, msg.sender);
     }
 
     // ── Recall Batch ───────────────────────────────────────────────────
@@ -177,7 +253,23 @@ contract PharmaTracking {
         return batchHistory[_batchId];
     }
 
+    function getSubBatches(string memory _batchId) public view returns (string[] memory) {
+        return subBatchIds[_batchId];
+    }
+
     function getMyRole() public view returns (Role) {
         return users[msg.sender];
+    }
+
+    // ── Internal Helpers ──────────────────────────────────────────────
+    function _uint2str(uint256 _i) internal pure returns (string memory) {
+        if (_i == 0) return "0";
+        uint256 j = _i;
+        uint256 length;
+        while (j != 0) { length++; j /= 10; }
+        bytes memory bstr = new bytes(length);
+        uint256 k = length;
+        while (_i != 0) { k--; bstr[k] = bytes1(uint8(48 + _i % 10)); _i /= 10; }
+        return string(bstr);
     }
 }

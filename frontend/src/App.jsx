@@ -1,7 +1,8 @@
 import { useState, useEffect, useEffectEvent, useRef } from "react";
 import { ethers } from "ethers";
-import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert } from "lucide-react";
-import { Html5QrcodeScanner } from "html5-qrcode";
+import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert, Info, Camera } from "lucide-react";
+import { Html5Qrcode } from "html5-qrcode";
+import Barcode from "react-barcode";
 import config from "./config.json";
 
 const contractAddress = config.contractAddress;
@@ -36,21 +37,62 @@ const getLegacyWalletOptions = () => {
   return options;
 };
 
-// Sub-component for QR Scanner using html5-qrcode
-const QRScannerPlugin = ({ onScanSuccess, onScanFailure }) => {
+// Sub-component for QR Scanner using raw Html5Qrcode to force auto-start
+const QRScannerPlugin = ({ onScanSuccess }) => {
+  const [camError, setCamError] = useState("");
+  const onSuccessRef = useRef(onScanSuccess);
+
   useEffect(() => {
-    const scanner = new Html5QrcodeScanner(
-      "qr-reader",
-      { fps: 10, qrbox: { width: 250, height: 250 } },
-      /* verbose= */ false
-    );
-    scanner.render(onScanSuccess, onScanFailure);
+    onSuccessRef.current = onScanSuccess;
+  }, [onScanSuccess]);
+
+  useEffect(() => {
+    let html5QrCode;
+    let isCleanedUp = false;
+
+    Html5Qrcode.getCameras().then(devices => {
+      if (isCleanedUp) return;
+      if (devices && devices.length > 0) {
+        html5QrCode = new Html5Qrcode("qr-reader-raw");
+        
+        html5QrCode.start(
+          { facingMode: "environment" }, 
+          { fps: 15 },
+          (decodedText) => {
+             if (!isCleanedUp && onSuccessRef.current) onSuccessRef.current(decodedText);
+          },
+          undefined
+        ).catch(err => {
+          if (!isCleanedUp) setCamError("Camera initialization failed. Please ensure permissions are granted.");
+        });
+      } else {
+        setCamError("No cameras detected on this device.");
+      }
+    }).catch(err => {
+      if (!isCleanedUp) setCamError("Camera access denied by browser permissions.");
+    });
 
     return () => {
-      scanner.clear().catch(e => console.error("Failed to clear scanner", e));
+      isCleanedUp = true;
+      if (html5QrCode && html5QrCode.isScanning) {
+        html5QrCode.stop().then(() => html5QrCode.clear()).catch(console.error);
+      } else if (html5QrCode) {
+        html5QrCode.clear();
+      }
     };
-  }, [onScanFailure, onScanSuccess]);
-  return <div id="qr-reader" className="w-full max-w-sm mx-auto overflow-hidden rounded-xl border-2 border-slate-700"></div>;
+  }, []);
+
+  return (
+    <div className="w-full max-w-sm mx-auto overflow-hidden rounded-xl border-2 border-slate-700 bg-slate-900 relative min-h-[300px] flex items-center justify-center">
+      <div id="qr-reader-raw" className="w-full h-full absolute inset-0"></div>
+      {camError && (
+        <div className="relative z-10 px-6 py-4 bg-red-500/90 text-white font-medium text-center shadow-lg rounded-xl flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+          <p>{camError}</p>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default function App() {
@@ -96,6 +138,25 @@ export default function App() {
   const [showScanner, setShowScanner] = useState(false);
   const [scanTarget, setScanTarget] = useState(""); // "verify" or "transfer"
   const [showWalletPicker, setShowWalletPicker] = useState(false);
+
+  // Transfer QR modal (shown after any transfer)
+  const [transferQrBatchId, setTransferQrBatchId] = useState(null);
+
+  // Split Batch form states
+  const [splitBatchId, setSplitBatchId] = useState("");
+  const [splitCount, setSplitCount] = useState(2);
+  const [splitReceiver, setSplitReceiver] = useState("");
+  const [splitLocation, setSplitLocation] = useState("");
+
+  const [soldId, setSoldId] = useState("");
+  const [soldLoc, setSoldLoc] = useState("");
+
+  // Generated sub-batches modal (after split)
+  const [generatedSubBatches, setGeneratedSubBatches] = useState(null);
+
+  // Verification: parent/child batch info
+  const [batchParentId, setBatchParentId] = useState("");
+  const [batchSubIds, setBatchSubIds] = useState([]);
 
   // EIP-6963: modern wallet discovery (MetaMask, Coinbase, etc.)
   const [eip6963Wallets, setEip6963Wallets] = useState([]);
@@ -375,7 +436,7 @@ export default function App() {
       const cleanId = transferId.toUpperCase().trim();
       const tx = await contract.transferOwnership(cleanId, transferTo, transferStatus, transferLoc);
       await tx.wait();
-      alert("Batch Transfer Recorded Immaculately!");
+      setTransferQrBatchId(cleanId);
       setTransferId(""); setTransferTo(""); setTransferLoc("");
     } catch (err) {
       console.error(err);
@@ -391,12 +452,29 @@ export default function App() {
       const cleanId = retTransferId.toUpperCase().trim();
       const tx = await contract.transferOwnership(cleanId, retTransferTo, retTransferStatus, retTransferLoc);
       await tx.wait();
-      alert("Batch Transfer Recorded Immaculately!");
+      setTransferQrBatchId(cleanId);
       setRetTransferId(""); setRetTransferTo(""); setRetTransferLoc("");
     } catch (err) {
       console.error(err);
       const reason = err.reason ? err.reason : (err.message ? err.message : "Verify you are the current holder.");
       alert(err.code === 4001 ? "Transaction cancelled." : "Error transferring batch:\n" + reason);
+    }
+  };
+
+  const markBatchSold = async (e) => {
+    e.preventDefault();
+    if (!contract) return;
+    try {
+      const cleanId = soldId.toUpperCase().trim();
+      const tx = await contract.markAsSold(cleanId, soldLoc);
+      await tx.wait();
+      setTransferQrBatchId(cleanId); // Optionally show QR
+      setSoldId(""); setSoldLoc("");
+      alert(`Batch ${cleanId} marked as SOLD successfully! It is now locked and protected from double-spend.`);
+    } catch (err) {
+      console.error(err);
+      const reason = err.reason ? err.reason : (err.message ? err.message : "Error marking as sold");
+      alert(err.code === 4001 ? "Transaction cancelled." : "Error:\n" + reason);
     }
   };
 
@@ -406,26 +484,90 @@ export default function App() {
     // Fallback to a read-only provider if wallet isn't connected (for Customers)
     let readContract = contract;
     if (!readContract) {
-      const readProvider = new ethers.JsonRpcProvider("https://ethereum-sepolia-rpc.publicnode.com");
+      const readProvider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
       readContract = new ethers.Contract(contractAddress, contractABI, readProvider);
     }
 
     try {
       const data = await readContract.getBatch(idToVerify);
       if(!data.exists) throw new Error("Batch doesn't exist");
-      const history = await readContract.getBatchHistory(idToVerify);
+      
+      // Fetch history recursively to build full chain of custody
+      let fullHistory = [];
+      let currentId = idToVerify;
+      let currentData = data;
+
+      while (true) {
+        const historyArr = await readContract.getBatchHistory(currentId);
+        // Clean proxy items and attach associatedBatch tag so UI knows which phase it was
+        const decoratedHistory = historyArr.map(item => ({
+            from: item.from,
+            to: item.to,
+            timestamp: Number(item.timestamp),
+            status: Number(item.status),
+            location: item.location,
+            notes: item.notes,
+            associatedBatch: currentId
+        }));
+        
+        fullHistory = [...decoratedHistory, ...fullHistory];
+
+        if (currentData.parentBatchId && currentData.parentBatchId !== "") {
+           currentId = currentData.parentBatchId;
+           currentData = await readContract.getBatch(currentId);
+        } else {
+           break;
+        }
+      }
+
       setBatchInfo(data);
-      setBatchHistory(history);
+      setBatchHistory(fullHistory);
+
+      // Fetch parent batch ID
+      setBatchParentId(data.parentBatchId || "");
+
+      // Fetch sub-batch IDs
+      try {
+        const subs = await readContract.getSubBatches(idToVerify);
+        setBatchSubIds(subs || []);
+      } catch {
+        setBatchSubIds([]);
+      }
     } catch (err) {
       console.error(err);
       alert("Batch not found on Blockchain.");
       setBatchInfo(null);
+      setBatchParentId("");
+      setBatchSubIds([]);
     }
   };
 
   const verifyBatch = async (e) => {
     e.preventDefault();
     verifyBatchId(verifyId.toUpperCase().trim());
+  };
+
+  // ── Split Batch Action ───────────────────────────────────────────
+  const splitBatchAction = async (e) => {
+    e.preventDefault();
+    if (!contract) return;
+    try {
+      const cleanId = splitBatchId.toUpperCase().trim();
+      const tx = await contract.splitBatch(cleanId, splitCount, splitReceiver, splitLocation);
+      await tx.wait();
+
+      // Generate sub-batch IDs locally to show QR codes
+      const subIds = [];
+      for (let i = 1; i <= splitCount; i++) {
+        subIds.push(`${cleanId}-S${i}`);
+      }
+      setGeneratedSubBatches({ parentId: cleanId, subIds });
+      setSplitBatchId(""); setSplitCount(2); setSplitReceiver(""); setSplitLocation("");
+    } catch (err) {
+      console.error(err);
+      const reason = err.reason || err.message || "Check console for details.";
+      alert(err.code === 4001 ? "Transaction cancelled." : "Error splitting batch:\n" + reason);
+    }
   };
 
   // QR Scan Callback
@@ -442,6 +584,15 @@ export default function App() {
       verifyBatchId(scannedId);
     } else if (scanTarget === "transfer") {
       setTransferId(scannedId);
+      setShowScanner(false);
+    } else if (scanTarget === "retTransfer") {
+      setRetTransferId(scannedId);
+      setShowScanner(false);
+    } else if (scanTarget === "splitBatch") {
+      setSplitBatchId(scannedId);
+      setShowScanner(false);
+    } else if (scanTarget === "soldId") {
+      setSoldId(scannedId);
       setShowScanner(false);
     }
   };
@@ -580,6 +731,82 @@ export default function App() {
                 <span className="font-mono font-bold text-lg text-slate-800">{mintedBatchId}</span>
               </div>
               <button className="text-blue-600 text-sm font-semibold hover:underline" onClick={() => setMintedBatchId(null)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TRANSFER QR MODAL OVERLAY */}
+      {transferQrBatchId && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md relative flex flex-col items-center text-center">
+            <button onClick={() => setTransferQrBatchId(null)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-800 bg-slate-100 rounded-full p-2 transition-colors">
+              <X className="w-5 h-5"/>
+            </button>
+            
+            <div className="w-16 h-16 bg-purple-100 rounded-full flex items-center justify-center text-purple-600 mb-4">
+              <ArrowRight className="w-8 h-8"/>
+            </div>
+            <h3 className="text-2xl font-bold text-slate-800 mb-2">Transfer Recorded!</h3>
+            <p className="text-sm text-slate-500 mb-6">Batch #{transferQrBatchId} ownership has been transferred on-chain. Print this updated QR code for the new holder.</p>
+            
+            <div className="bg-white shadow-xl shadow-slate-200 p-4 rounded-3xl border border-slate-100 mb-6">
+              <img 
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(`${window.location.origin}/?batch=${transferQrBatchId}`)}`} 
+                alt="Transfer QR Code" 
+                style={{ width: '220px', height: '220px' }} 
+              />
+            </div>
+            
+            <div className="bg-slate-50 border border-slate-200 w-full p-4 rounded-xl flex justify-between items-center text-left">
+              <div>
+                <span className="block text-xs text-slate-500 font-medium uppercase">Batch ID</span>
+                <span className="font-mono font-bold text-lg text-slate-800">{transferQrBatchId}</span>
+              </div>
+              <button className="text-purple-600 text-sm font-semibold hover:underline" onClick={() => setTransferQrBatchId(null)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GENERATED SUB-BATCHES QR MODAL */}
+      {generatedSubBatches && (
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-4xl relative max-h-[90vh] overflow-y-auto">
+            <button onClick={() => setGeneratedSubBatches(null)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-800 bg-slate-100 rounded-full p-2 transition-colors z-10">
+              <X className="w-5 h-5"/>
+            </button>
+            
+            <div className="flex flex-col items-center text-center mb-8">
+              <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600 mb-4">
+                <CheckCircle2 className="w-8 h-8"/>
+              </div>
+              <h3 className="text-2xl font-bold text-slate-800 mb-2">Batch Split Successful!</h3>
+              <p className="text-sm text-slate-500">Parent batch <span className="font-mono font-bold">#{generatedSubBatches.parentId}</span> has been split into <span className="font-bold">{generatedSubBatches.subIds.length}</span> individual unit sub-batches. Print a scanner barcode for each box.</p>
+            </div>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {generatedSubBatches.subIds.map((subId, idx) => (
+                <div key={subId} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-col items-center hover:shadow-lg transition-shadow">
+                  <div className="text-xs font-bold text-emerald-600 uppercase tracking-wider mb-2">Unit #{idx + 1}</div>
+                  <div className="bg-white p-2 rounded-xl border border-slate-100 w-full flex justify-center items-center overflow-hidden">
+                    <Barcode 
+                      value={subId} 
+                      format="CODE128" 
+                      width={1.8} 
+                      height={60} 
+                      fontSize={14} 
+                      margin={10} 
+                      background="#ffffff" 
+                      lineColor="#1e293b"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+            
+            <div className="mt-8 flex justify-center">
+              <button className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-8 rounded-xl transition-colors shadow-lg shadow-emerald-600/20" onClick={() => setGeneratedSubBatches(null)}>Done</button>
             </div>
           </div>
         </div>
@@ -786,6 +1013,7 @@ export default function App() {
                             <label className="block text-sm font-medium text-slate-600 mb-1">Batch ID</label>
                             <div className="flex gap-2">
                               <input required type="text" value={transferId} onChange={e=>setTransferId(e.target.value.toUpperCase().trim())} className="flex-1 w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none transition" placeholder="e.g. BCH-XYZ" />
+                              <button type="button" onClick={() => { setScanTarget("transfer"); setShowScanner(true); }} className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition border border-slate-200 flex-shrink-0"><QrCode className="w-5 h-5"/></button>
                             </div>
                           </div>
                           <div>
@@ -831,6 +1059,7 @@ export default function App() {
                             <label className="block text-sm font-medium text-slate-600 mb-1">Batch ID</label>
                             <div className="flex gap-2">
                               <input required type="text" value={retTransferId} onChange={e=>setRetTransferId(e.target.value.toUpperCase().trim())} className="flex-1 w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition" placeholder="e.g. BCH-XYZ" />
+                              <button type="button" onClick={() => { setScanTarget("retTransfer"); setShowScanner(true); }} className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl transition border border-slate-200 flex-shrink-0"><QrCode className="w-5 h-5"/></button>
                             </div>
                           </div>
                           <div>
@@ -864,12 +1093,59 @@ export default function App() {
 
                 </div>
 
+                {/* --- Split Batch Panel --- */}
+                <div className="mt-8 bg-gradient-to-br from-amber-50 to-orange-50 rounded-3xl p-8 border border-amber-200 shadow-xl shadow-amber-100/50 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-40 h-40 bg-amber-400 opacity-5 blur-[60px] rounded-full"></div>
+                  <div className="flex items-center gap-3 mb-2 relative z-10">
+                    <div className="p-3 bg-amber-100 text-amber-600 rounded-xl">
+                      <QrCode className="w-6 h-6" />
+                    </div>
+                    <h3 className="text-xl font-bold text-slate-800">Split Batch into Sub-Batches</h3>
+                  </div>
+                  <p className="text-sm text-slate-500 mb-6 relative z-10">Break a parent batch into multiple smaller shipments. Each sub-batch gets a unique ID and QR code for independent tracking.</p>
+                  <form onSubmit={splitBatchAction} className="grid md:grid-cols-2 gap-6 relative z-10">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-600 mb-1">Parent Batch ID</label>
+                      <div className="flex gap-2">
+                        <input required type="text" value={splitBatchId} onChange={e=>setSplitBatchId(e.target.value.toUpperCase().trim())} className="w-full px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none transition bg-white" placeholder="e.g. BCH-XYZ" />
+                        <button type="button" onClick={() => { setScanTarget("splitBatch"); setShowScanner(true); }} className="px-4 py-3 bg-amber-100 hover:bg-amber-200 text-amber-600 rounded-xl transition border border-amber-200 flex-shrink-0"><QrCode className="w-5 h-5"/></button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-600 mb-1">Number of Sub-Batches</label>
+                      <select value={splitCount} onChange={e=>setSplitCount(Number(e.target.value))} className="w-full px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+                        {[...Array(50)].map((_,i) => <option key={i+1} value={i+1}>{i+1}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-600 mb-1">Receiver Address</label>
+                      <div className="flex flex-col xl:flex-row gap-2">
+                        <input required value={splitReceiver} onChange={e=>setSplitReceiver(e.target.value)} className="flex-1 px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none transition bg-white w-full" placeholder="0x..." />
+                        <select onChange={e => {if(e.target.value) setSplitReceiver(e.target.value)}} className="w-full xl:w-auto px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none bg-white text-sm text-slate-600">
+                          <option value="">Auto-fill Demo...</option>
+                          <option value="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC">Account #2 (Retailer)</option>
+                          <option value="0x70997970C51812dc3A010C7d01b50e0d17dc79C8">Account #1 (Distributor)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-600 mb-1">Location</label>
+                      <input required value={splitLocation} onChange={e=>setSplitLocation(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none transition bg-white" placeholder="Warehouse, City" />
+                    </div>
+                    <div className="md:col-span-2">
+                      <button type="submit" className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-amber-500/30 flex items-center justify-center gap-2">
+                        <QrCode className="w-5 h-5" /> Split & Generate QR Codes
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
                 {/* --- Operational Controls --- */}
                 <div className="mt-8 bg-white rounded-3xl p-8 border border-slate-100 shadow-xl shadow-slate-200/50">
                   <h3 className="text-xl font-bold flex items-center gap-2 mb-6 text-slate-800">
                     <ShieldCheck className="w-6 h-6 text-red-500" /> Security & Exception Handling
                   </h3>
-                  <div className="grid md:grid-cols-2 gap-8">
+                  <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
                     {/* Recall Panel */}
                     <div className="bg-red-50/50 border border-red-100 rounded-2xl p-6">
                       <h4 className="font-bold text-red-700 mb-4 flex items-center gap-2">
@@ -907,6 +1183,21 @@ export default function App() {
                           <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white" onChange={e=>setLostId(e.target.value)} />
                           <input required type="text" placeholder="Reason (e.g. Temperature breach)" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white" onChange={e=>setLostReason(e.target.value)} />
                           <button className="w-full bg-orange-600 hover:bg-orange-700 text-white font-medium py-3 rounded-xl transition-colors">Confirm Incident Details</button>
+                        </form>
+                    </div>
+
+                    {/* Mark As Sold Panel (Point of Sale) */}
+                    <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-6 md:col-span-2 lg:col-span-1">
+                        <h4 className="font-bold text-blue-700 mb-4 flex items-center gap-2">
+                          <CheckCircle2 className="w-5 h-5" /> Retail Checkout (Mark Sold)
+                        </h4>
+                        <form onSubmit={markBatchSold} className="space-y-4">
+                          <div className="flex gap-2">
+                             <input required type="text" placeholder="Batch ID" value={soldId} className="w-full px-4 py-3 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none bg-white" onChange={e=>setSoldId(e.target.value)} />
+                             <button type="button" onClick={() => { setScanTarget("soldId"); setShowScanner(true); }} className="px-4 py-3 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded-xl transition border border-blue-200 flex-shrink-0"><QrCode className="w-5 h-5"/></button>
+                          </div>
+                          <input required type="text" placeholder="Pharmacy Name / Location" value={soldLoc} className="w-full px-4 py-3 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none bg-white" onChange={e=>setSoldLoc(e.target.value)} />
+                          <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-xl transition-colors shadow-lg shadow-blue-600/20">Finalize Sale & Lock</button>
                         </form>
                     </div>
                   </div>
@@ -952,6 +1243,26 @@ export default function App() {
                             <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Current Owner Address</span>
                             <span className="text-emerald-400 font-mono text-sm break-all">{batchInfo.currentOwner}</span>
                           </div>
+                          {batchParentId && (
+                            <div className="col-span-2">
+                              <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Parent Batch</span>
+                              <button onClick={() => { setVerifyId(batchParentId); verifyBatchId(batchParentId); }} className="text-blue-400 font-mono text-sm hover:underline flex items-center gap-2">
+                                <ArrowLeft className="w-4 h-4" /> {batchParentId}
+                              </button>
+                            </div>
+                          )}
+                          {batchSubIds.length > 0 && (
+                            <div className="col-span-2">
+                              <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Sub-Batches ({batchSubIds.length})</span>
+                              <div className="flex flex-wrap gap-2 mt-1">
+                                {batchSubIds.map(subId => (
+                                  <button key={subId} onClick={() => { setVerifyId(subId); verifyBatchId(subId); }} className="text-blue-400 hover:text-blue-300 font-mono text-xs bg-slate-800 border border-slate-700 px-2 py-1 rounded-md transition-colors">
+                                    {subId}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -986,10 +1297,21 @@ export default function App() {
                                     <span className="text-blue-400 font-bold text-lg">{STATUS[Number(event.status)]}</span>
                                     <span className="text-slate-400 text-xs font-medium bg-slate-900 px-3 py-1 rounded-full whitespace-nowrap">{new Date(Number(event.timestamp) * 1000).toLocaleString()}</span>
                                   </div>
+
+                                  {event.associatedBatch && (
+                                    <div className="mb-3 relative z-10">
+                                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 bg-slate-900/60 px-2 py-1.5 rounded border border-slate-700">Batch Phase: <span className="text-blue-300 font-mono">{event.associatedBatch}</span></span>
+                                    </div>
+                                  )}
                                   
                                   <p className="text-slate-300 mb-4 flex items-center gap-2 relative z-10">
                                     <span className="text-slate-500 text-sm">Location:</span> {event.location}
                                   </p>
+                                  {event.notes && (
+                                    <p className="text-amber-400/90 mb-4 flex text-left items-start gap-2 relative z-10 text-xs italic bg-amber-400/10 p-2 rounded border border-amber-400/20">
+                                      <Info className="w-4 h-4 shrink-0 mt-0.5"/> <span>{event.notes}</span>
+                                    </p>
+                                  )}
                                   
                                   <div className="bg-slate-900/50 p-3 rounded-xl border border-slate-700 relative z-10">
                                     <div className="flex justify-between items-center mb-1">
@@ -1037,6 +1359,42 @@ export default function App() {
 
             {batchInfo && (
               <div className="bg-slate-800 border-t border-slate-700 p-8 md:p-12">
+              
+                {/* DYNAMIC FRAUD ALERT UI */}
+                {Number(batchInfo.status) === 4 && (
+                  <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-orange-200 p-8 rounded-3xl mb-12 shadow-xl shadow-orange-900/10 relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-orange-500 opacity-5 blur-[100px] rounded-full"></div>
+                    <div className="relative z-10 flex flex-col md:flex-row items-start gap-6">
+                      <div className="bg-orange-100 p-4 rounded-2xl text-orange-600 shadow-sm shrink-0">
+                        <ShieldCheck className="w-10 h-10" />
+                      </div>
+                      <div>
+                        <h3 className="text-orange-900 font-extrabold text-2xl mb-2 flex items-center gap-2">
+                          Status: Final Sale (Sold)
+                        </h3>
+                        <p className="text-orange-800 font-medium leading-relaxed mb-4 text-lg">
+                          This exact medicine token has already been marked as <strong className="font-extrabold uppercase text-orange-900 bg-orange-200/50 px-2 py-0.5 rounded">Sold</strong> at a verified pharmacy.
+                        </p>
+                        
+                        <div className="grid md:grid-cols-2 gap-4 mt-6 border-t border-orange-200/60 pt-6">
+                          <div className="bg-white/60 p-5 rounded-2xl border border-orange-100">
+                            <h4 className="font-bold text-emerald-700 flex items-center gap-2 mb-2">
+                              <CheckCircle2 className="w-5 h-5"/> If you just bought this:
+                            </h4>
+                            <p className="text-emerald-800/90 text-sm font-medium">Your purchase is confirmed authentic! The pharmacy successfully logged your medicine on the blockchain.</p>
+                          </div>
+                          <div className="bg-red-50 p-5 rounded-2xl border border-red-100 shadow-inner">
+                            <h4 className="font-bold text-red-700 flex items-center gap-2 mb-2">
+                              <ShieldAlert className="w-5 h-5"/> If you are buying this NOW:
+                            </h4>
+                            <p className="text-red-800/90 text-sm font-medium"><strong>STOP!</strong> Do not purchase or consume. This is a duplicate/counterfeit barcode of a medicine that was already sold to someone else.</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
                 <div className="flex flex-col lg:flex-row gap-8 justify-between items-start">
                   <div className="flex-1">
                     <p className="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Medicine Detail</p>
@@ -1064,6 +1422,26 @@ export default function App() {
                       <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Current Owner Address</span>
                       <span className="text-emerald-400 font-mono text-sm break-all">{batchInfo.currentOwner}</span>
                     </div>
+                    {batchParentId && (
+                      <div className="col-span-2">
+                        <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Parent Batch</span>
+                        <button onClick={() => { setVerifyId(batchParentId); verifyBatchId(batchParentId); }} className="text-blue-400 font-mono text-sm hover:underline flex items-center gap-2">
+                          <ArrowLeft className="w-4 h-4" /> {batchParentId}
+                        </button>
+                      </div>
+                    )}
+                    {batchSubIds.length > 0 && (
+                      <div className="col-span-2">
+                        <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Sub-Batches ({batchSubIds.length})</span>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          {batchSubIds.map(subId => (
+                            <button key={subId} onClick={() => { setVerifyId(subId); verifyBatchId(subId); }} className="text-blue-400 hover:text-blue-300 font-mono text-xs bg-slate-800 border border-slate-700 px-2 py-1 rounded-md transition-colors">
+                              {subId}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1098,10 +1476,21 @@ export default function App() {
                               <span className="text-blue-400 font-bold text-lg">{STATUS[Number(event.status)]}</span>
                               <span className="text-slate-400 text-xs font-medium bg-slate-900 px-3 py-1 rounded-full whitespace-nowrap">{new Date(Number(event.timestamp) * 1000).toLocaleString()}</span>
                             </div>
+
+                            {event.associatedBatch && (
+                              <div className="mb-3 relative z-10">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 bg-slate-900/60 px-2 py-1.5 rounded border border-slate-700">Batch Phase: <span className="text-blue-300 font-mono">{event.associatedBatch}</span></span>
+                              </div>
+                            )}
                             
                             <p className="text-slate-300 mb-4 flex items-center gap-2 relative z-10">
                               <span className="text-slate-500 text-sm">Location:</span> {event.location}
                             </p>
+                            {event.notes && (
+                              <p className="text-amber-400/90 mb-4 flex text-left items-start gap-2 relative z-10 text-xs italic bg-amber-400/10 p-2 rounded border border-amber-400/20">
+                                <Info className="w-4 h-4 shrink-0 mt-0.5"/> <span>{event.notes}</span>
+                              </p>
+                            )}
                             
                             <div className="bg-slate-900/50 p-3 rounded-xl border border-slate-700 relative z-10">
                               <div className="flex justify-between items-center mb-1">
