@@ -1,4 +1,5 @@
 import { useState, useEffect, useEffectEvent, useRef } from "react";
+import { Toaster, toast } from "react-hot-toast";
 import { ethers } from "ethers";
 import { Wallet, ShieldCheck, Settings, ArrowRight, CheckCircle2, User, Building2, Search, ArrowLeft, Pill, QrCode, X, AlertTriangle, ShieldAlert, Ban, XCircle, Thermometer, Info, Camera, Bell, TriangleAlert, Clock, Fingerprint, Scan } from "lucide-react";
 import { Html5QrcodeScanner, Html5Qrcode } from "html5-qrcode";
@@ -117,8 +118,8 @@ export default function App() {
   const [batchName, setBatchName] = useState("");
   const [expiry, setExpiry] = useState("");
   const [location, setLocation] = useState("");
-  const [expectedDistributor, setExpectedDistributor] = useState("");
-  const [expectedRetailer, setExpectedRetailer] = useState("");
+  const [expectedDistributor, setExpectedDistributor] = useState("0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
+  const [expectedRetailer, setExpectedRetailer] = useState("0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC");
   
   const [transferId, setTransferId] = useState("");
   const [transferTo, setTransferTo] = useState("");
@@ -326,7 +327,7 @@ export default function App() {
       injectedProvider = found?.provider ?? null;
       walletLabel = walletLabel ?? found?.label ?? "Wallet";
     }
-    if (!injectedProvider) return alert("Please install an EVM wallet such as MetaMask.");
+    if (!injectedProvider) return toast("Please install an EVM wallet such as MetaMask.", { icon: "⚠️" });
 
     const connectedWalletName = walletLabel ?? "Wallet";
     const walletId = preferredWallet ?? "wallet";
@@ -423,7 +424,7 @@ export default function App() {
       setRole(0);
       console.error(err);
       if (!silent && err.code !== 4001) {
-        alert(err.shortMessage || err.message || "Wallet connection failed.");
+        toast.error(err.shortMessage || err.message || "Wallet connection failed.");
       }
     }
   };
@@ -466,7 +467,7 @@ export default function App() {
       } catch {}
       setView("industry");
       setPassAuth(true);
-    } catch (e) { console.error(e); alert("Failed Hardhat Demo. Is it running?"); }
+    } catch (e) { console.error(e); toast.error("Failed Hardhat Demo. Is it running?"); }
   };
 
   const signOut = async () => {
@@ -509,7 +510,7 @@ export default function App() {
     try {
       const net = await provider.getNetwork();
       if (Number(net.chainId) !== 31337) {
-        alert("⚠️ Wrong Network Detected!\n\nYour MetaMask is currently connected to " + (net.name || "another network") + " instead of Localhost.\n\nPlease open the MetaMask extension, click the network dropdown at the top, and explicitly select 'Localhost 8545' before trying to send a transaction.");
+        toast.error("⚠️ Wrong Network Detected!\n\nYour MetaMask is currently connected to " + (net.name || "another network", { duration: 6000 }) + " instead of Localhost.\n\nPlease open the MetaMask extension, click the network dropdown at the top, and explicitly select 'Localhost 8545' before trying to send a transaction.");
         return false;
       }
     } catch (err) {
@@ -519,16 +520,16 @@ export default function App() {
   };
 
   const registerRole = async (selectedRole) => {
-    if (!contract || !account) return alert("Please connect wallet first");
+    if (!contract || !account) return toast("Please connect wallet first", { icon: "⚠️" });
     if (!(await ensureLocalNetwork())) return;
     try {
       const tx = await contract.registerUser(account, selectedRole);
       await tx.wait();
-      alert("Role assigned successfully!");
+      toast.success("Role assigned successfully!");
       setRole(selectedRole);
     } catch (err) {
       console.error(err);
-      alert("Error assigning role.");
+      toast.error("Error assigning role.");
     }
   }
 
@@ -557,7 +558,7 @@ export default function App() {
       setBatchName(""); setExpiry(""); setLocation(""); setExpectedDistributor(""); setExpectedRetailer("");
     } catch (err) {
       console.error(err);
-      alert(err.code === 4001 ? "Transaction cancelled." : "Error creating batch. Check console for details.");
+      toast.error(err.code === 4001 ? "Transaction cancelled." : "Error creating batch. Check console for details.");
     }
   };
 
@@ -584,14 +585,25 @@ export default function App() {
         setDistDeviations(Number(dev));
         setDistTotalTransfers(Number(tot));
       } catch {}
-      alert("Batch Transfer Recorded!");
-      setTransferQrBatchId(cleanId);
+      try {
+        const batchData = await contract.getBatch(cleanId);
+        if (Number(batchData.status) === 7) {
+          toast.error("ROUTE DEVIATION ALERT!\nBatch transferred but has been permanently QUARANTINED due to fraud/deviation.", { duration: 6000 });
+        } else {
+          toast.success("Batch Transfer Recorded!");
+          setTransferQrBatchId(cleanId);
+        }
+      } catch (e) {
+        toast.success("Batch Transfer Recorded!");
+        setTransferQrBatchId(cleanId);
+      }
+      
       if (typeof fetchNotifications === "function") fetchNotifications();
       setTransferId(""); setTransferTo(""); setTransferLoc("");
     } catch (err) {
       console.error(err);
       const reason = err.reason ? err.reason : (err.message ? err.message : "Verify you are the current holder.");
-      alert(err.code === 4001 ? "Transaction cancelled." : "Error transferring batch:\n" + reason);
+      toast.error(err.code === 4001 ? "Transaction cancelled." : "Error transferring batch:\n" + reason);
     }
   };
 
@@ -618,14 +630,25 @@ export default function App() {
         setDistDeviations(Number(dev));
         setDistTotalTransfers(Number(tot));
       } catch {}
-      alert("Batch Transfer Recorded!");
-      setTransferQrBatchId(cleanId);
+      try {
+        const batchData = await contract.getBatch(cleanId);
+        if (Number(batchData.status) === 7) {
+          toast.error("ROUTE DEVIATION ALERT!\nBatch transferred but has been permanently QUARANTINED due to fraud/deviation.", { duration: 6000 });
+        } else {
+          toast.success("Batch Transfer Recorded!");
+          setTransferQrBatchId(cleanId);
+        }
+      } catch (e) {
+        toast.success("Batch Transfer Recorded!");
+        setTransferQrBatchId(cleanId);
+      }
+
       if (typeof fetchNotifications === "function") fetchNotifications();
       setRetTransferId(""); setRetTransferTo(""); setRetTransferLoc("");
     } catch (err) {
       console.error(err);
       const reason = err.reason ? err.reason : (err.message ? err.message : "Verify you are the current holder.");
-      alert(err.code === 4001 ? "Transaction cancelled." : "Error transferring batch:\n" + reason);
+      toast.error(err.code === 4001 ? "Transaction cancelled." : "Error transferring batch:\n" + reason);
     }
   };
 
@@ -638,11 +661,11 @@ export default function App() {
       await tx.wait();
       setTransferQrBatchId(cleanId); // Optionally show QR
       setSoldId(""); setSoldLoc("");
-      alert(`Batch ${cleanId} marked as SOLD successfully! It is now locked and protected from double-spend.`);
+      toast.success(`Batch ${cleanId} marked as SOLD successfully! It is now locked and protected from double-spend.`);
     } catch (err) {
       console.error(err);
       const reason = err.reason ? err.reason : (err.message ? err.message : "Error marking as sold");
-      alert(err.code === 4001 ? "Transaction cancelled." : "Error:\n" + reason);
+      toast.error(err.code === 4001 ? "Transaction cancelled." : "Error:\n" + reason);
     }
   };
 
@@ -671,23 +694,9 @@ export default function App() {
           throw new Error(`Contract not found on local blockchain at ${contractAddress}. Have you run the hardhat deploy script?`);
         }
       }
-      readContract = new ethers.Contract(contractAddress, contractABI, readProvider);
-      
-      // Create a writable contract using hardhat account #3 (neutral scanner)
-      // so scan tracking works even without MetaMask connected
-      const scannerWallet = new ethers.Wallet(
-        "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
-        readProvider
-      );
-      writeContract = new ethers.Contract(contractAddress, contractABI, scannerWallet);
-      
-      const code = await readProvider.getCode(contractAddress);
-      if (code === "0x" || code === "0x0") {
-        throw new Error(`Contract not found on local blockchain at ${contractAddress}. Have you run the hardhat deploy script?`);
-      }
     } catch (e) {
       console.error(e);
-      alert(e.message || "Failed to establish connection to the blockchain.");
+      toast.error(e.message || "Failed to establish connection to the blockchain.");
       return;
     }
 
@@ -811,7 +820,7 @@ export default function App() {
     } catch (err) {
       console.error(err);
       const reason = err.reason || err.message || "Check console for details.";
-      alert(err.code === 4001 ? "Transaction cancelled." : "Error splitting batch:\n" + reason);
+      toast.error(err.code === 4001 ? "Transaction cancelled." : "Error splitting batch:\n" + reason);
     }
   };
 
@@ -847,7 +856,7 @@ export default function App() {
     if (passKey === "industry123") {
       setPassAuth(true);
     } else {
-      alert("Invalid organization access key.");
+      toast.success("Invalid organization access key.");
     }
   };
 
@@ -939,55 +948,123 @@ export default function App() {
   // Landing view
   if (view === "landing") {
     return (
-      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
-        <div className="mb-12 flex flex-col items-center">
-          <ShieldCheck className="text-cyan-400 w-20 h-20 mb-4" />
-          <h1 className="text-5xl font-extrabold text-white text-center">
-            PharmaChain
-          </h1>
-          <p className="text-slate-400 mt-3 text-lg text-center max-w-lg">
-            Securing the pharmaceutical supply chain using immutable blockchain ledgers.
-          </p>
+      <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-cyan-50 flex items-center justify-center p-6 relative overflow-hidden">
+        
+        {/* Decorative Floating Blobs for Glassmorphism Effect */}
+        <div className="absolute top-20 left-20 w-96 h-96 bg-cyan-300/30 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob"></div>
+        <div className="absolute top-40 right-20 w-96 h-96 bg-indigo-300/30 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob" style={{ animationDelay: '2s' }}></div>
+        <div className="absolute -bottom-20 left-1/2 w-96 h-96 bg-purple-300/30 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob" style={{ animationDelay: '4s' }}></div>
+
+        <div className="max-w-7xl w-full mx-auto z-10 grid lg:grid-cols-2 gap-12 items-center">
+          
+          {/* Left Column: Copy & Actions */}
+          <div className="flex flex-col items-start text-left space-y-8">
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-cyan-50 border border-cyan-200 text-cyan-800 text-sm font-semibold shadow-sm">
+              <ShieldCheck className="w-4 h-4 text-cyan-600" />
+              100% Immutable Supply Chain
+            </div>
+            
+            <h1 className="text-5xl lg:text-7xl font-extrabold text-slate-900 tracking-tight leading-tight drop-shadow-sm">
+              Securing <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-600 to-indigo-600">Tomorrow's Medicine</span> Today.
+            </h1>
+            
+            <p className="text-lg text-slate-600 max-w-xl leading-relaxed">
+              Experience total transparency. PharmaChain ensures every drug you touch is verified, authentic, and safely logged onto an immutable public ledger.
+            </p>
+
+            <div className="flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
+              <button 
+                onClick={() => setView("industry")}
+                className="group relative flex items-center justify-center gap-3 bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 text-white px-8 py-4 rounded-full font-bold shadow-xl shadow-indigo-500/30 transition-all hover:shadow-indigo-500/50 hover:-translate-y-1 overflow-hidden"
+              >
+                <span className="relative z-10 font-bold">Industry Portal</span>
+                <ArrowRight className="w-5 h-5 relative z-10 group-hover:translate-x-1 transition-transform" />
+              </button>
+              
+              <button 
+                onClick={() => setView("customer")}
+                className="flex items-center justify-center gap-3 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 px-8 py-4 rounded-full font-bold shadow-sm transition-all hover:shadow-md hover:-translate-y-1"
+              >
+                <Search className="w-5 h-5 text-indigo-600" />
+                <span>Verify Medicine</span>
+              </button>
+            </div>
+            
+            <div className="pt-8 flex items-center gap-6 opacity-60 grayscale filter">
+              <span className="text-xs font-bold uppercase tracking-widest text-slate-500">Trusted By</span>
+              <div className="flex gap-4">
+                <span className="font-serif font-bold text-xl text-slate-700">MediCorp</span>
+                <span className="font-sans font-black tracking-tighter text-xl text-slate-700">G-PHARMA</span>
+                <span className="font-mono font-bold text-xl text-slate-700">BioSync</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Illustration */}
+          <div className="relative w-full h-[500px] flex items-center justify-center pt-8 lg:pt-0">
+            {/* Ambient glow behind image */}
+            <div className="absolute inset-0 bg-gradient-to-tr from-cyan-400/20 to-purple-400/20 blur-3xl rounded-full"></div>
+            
+            <img 
+              src="/src/assets/hero.png" 
+              alt="Blockchain Medicine Isometric Illustration" 
+              className="relative z-10 max-w-full max-h-[120%] object-contain filter drop-shadow-2xl hover:scale-105 transition-transform duration-700"
+              style={{ animation: 'float 6s ease-in-out infinite' }}
+            />
+            
+            {/* Floating Info Cards */}
+            <div className="absolute bottom-4 -left-4 lg:bottom-10 lg:-left-10 bg-white/70 backdrop-blur-xl border border-white/80 p-4 rounded-2xl shadow-xl z-20" style={{ animation: 'float 4s ease-in-out infinite' }}>
+              <div className="flex items-center gap-3">
+                <div className="bg-emerald-100 p-2 rounded-lg"><CheckCircle2 className="w-5 h-5 text-emerald-600" /></div>
+                <div>
+                  <p className="text-xs font-bold text-slate-800">Global Ledger</p>
+                  <p className="text-[10px] text-slate-500">100% Uptime</p>
+                </div>
+              </div>
+            </div>
+
+             <div className="absolute top-4 -right-2 lg:top-10 lg:-right-5 bg-white/70 backdrop-blur-xl border border-white/80 p-4 rounded-2xl shadow-xl z-20" style={{ animation: 'float 5s ease-in-out infinite 1s' }}>
+              <div className="flex items-center gap-3">
+                <div className="bg-blue-100 p-2 rounded-lg"><Search className="w-5 h-5 text-blue-600" /></div>
+                <div>
+                  <p className="text-xs font-bold text-slate-800">Sub-second</p>
+                  <p className="text-[10px] text-slate-500">Verification</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
 
-        <div className="grid md:grid-cols-2 gap-6 max-w-4xl w-full">
-          <button 
-            onClick={() => setView("customer")}
-            className="group relative bg-slate-800 border border-slate-700 hover:border-cyan-500 rounded-3xl p-8 transition-all hover:-translate-y-1 hover:shadow-[0_10px_40px_-10px_rgba(6,182,212,0.3)] text-left flex flex-col items-center justify-center min-h-[250px]"
-          >
-            <div className="bg-cyan-500/10 p-5 rounded-2xl text-cyan-400 group-hover:scale-110 transition-transform mb-6">
-              <Search className="w-10 h-10" />
-            </div>
-            <h2 className="text-2xl font-bold text-white mb-2">Verify Customer</h2>
-            <p className="text-slate-400 text-center">
-              I am a patient or consumer checking the authenticity and origin of my medicine.
-            </p>
-          </button>
-
-          <button 
-            onClick={() => setView("industry")}
-            className="group relative bg-slate-800 border border-slate-700 hover:border-purple-500 rounded-3xl p-8 transition-all hover:-translate-y-1 hover:shadow-[0_10px_40px_-10px_rgba(168,85,247,0.3)] text-left flex flex-col items-center justify-center min-h-[250px]"
-          >
-            <div className="bg-purple-500/10 p-5 rounded-2xl text-purple-400 group-hover:scale-110 transition-transform mb-6">
-              <Building2 className="w-10 h-10" />
-            </div>
-            <h2 className="text-2xl font-bold text-white mb-2">Industry Login</h2>
-            <p className="text-slate-400 text-center">
-              I am a Manufacturer, Distributor, or Healthcare Provider managing supply lines.
-            </p>
-          </button>
-        </div>
+        {/* CSS for custom animations */}
+        <style dangerouslySetInnerHTML={{__html: `
+          @keyframes float {
+            0% { transform: translateY(0px); }
+            50% { transform: translateY(-15px); }
+            100% { transform: translateY(0px); }
+          }
+          @keyframes blob {
+            0% { transform: translate(0px, 0px) scale(1); }
+            33% { transform: translate(30px, -50px) scale(1.1); }
+            66% { transform: translate(-20px, 20px) scale(0.9); }
+            100% { transform: translate(0px, 0px) scale(1); }
+          }
+          .animate-blob {
+            animation: blob 7s infinite;
+          }
+        `}} />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-20 relative">
+    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-cyan-50 text-slate-800 font-sans pb-20 relative">
+      <Toaster position="top-right" toastOptions={{ style: { background: "rgba(255, 255, 255, 1)", backdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.5)", color: "#1e293b", boxShadow: "0 8px 32px rgba(0,0,0,0.08)" } }} />
       
       {/* WALLET PICKER MODAL */}
       {showWalletPicker && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setShowWalletPicker(false)}>
-          <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-sm relative" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white/50 backdrop-blur-md rounded-3xl shadow-2xl p-8 w-full max-w-sm relative" onClick={(e) => e.stopPropagation()}>
             <button onClick={() => setShowWalletPicker(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-800 bg-slate-100 rounded-full p-2 transition-colors">
               <X className="w-5 h-5" />
             </button>
@@ -998,7 +1075,7 @@ export default function App() {
                 <button
                   key={wallet.id}
                   onClick={() => { connectWallet({ injectedProvider: wallet.provider, preferredWallet: wallet.id, walletLabel: wallet.label }); setShowWalletPicker(false); }}
-                  className="flex items-center gap-4 w-full rounded-2xl border-2 border-slate-200 hover:border-blue-500 bg-white hover:bg-blue-50 px-5 py-4 transition-all group"
+                  className="flex items-center gap-4 w-full rounded-2xl border-2 border-slate-200 hover:border-blue-500 bg-white/50 backdrop-blur-md hover:bg-blue-50 px-5 py-4 transition-all group"
                 >
                   <div className="w-10 h-10 rounded-xl bg-slate-100 group-hover:bg-blue-100 flex items-center justify-center flex-shrink-0 transition-colors overflow-hidden">
                     {wallet.icon
@@ -1019,7 +1096,7 @@ export default function App() {
       {/* SCANNER MODAL OVERLAY */}
       {showScanner && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md relative">
+          <div className="bg-white/50 backdrop-blur-md rounded-2xl shadow-2xl p-6 w-full max-w-md relative">
             <button onClick={() => setShowScanner(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-800 bg-slate-100 rounded-full p-2 transition-colors">
               <X className="w-5 h-5"/>
             </button>
@@ -1035,7 +1112,7 @@ export default function App() {
       {/* MINT SUCCESS QR MODAL OVERLAY */}
       {mintedBatchId && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md relative flex flex-col items-center text-center">
+          <div className="bg-white/50 backdrop-blur-md rounded-3xl shadow-2xl p-8 w-full max-w-md relative flex flex-col items-center text-center">
             <button onClick={() => setMintedBatchId(null)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-800 bg-slate-100 rounded-full p-2 transition-colors">
               <X className="w-5 h-5"/>
             </button>
@@ -1046,7 +1123,7 @@ export default function App() {
             <h3 className="text-2xl font-bold text-slate-800 mb-2">Batch Minted!</h3>
             <p className="text-sm text-slate-500 mb-6">Batch #{mintedBatchId} is now live on the Blockchain. Print this QR code and attach it to the packaging.</p>
             
-            <div className="bg-white shadow-xl shadow-slate-200 p-4 rounded-3xl border border-slate-100 mb-6">
+            <div className="bg-white/50 backdrop-blur-md shadow-xl shadow-slate-200 p-4 rounded-3xl border border-slate-100 mb-6">
               {/* Pointing to localhost:5173 URL with query parameter via Third-Party QR API */}
               <img 
                 src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(`${window.location.origin}/?batch=${mintedBatchId}`)}`} 
@@ -1069,7 +1146,7 @@ export default function App() {
       {/* WRONG NETWORK BANNER */}
       {wrongNetwork && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl p-10 w-full max-w-md text-center">
+          <div className="bg-white/50 backdrop-blur-md rounded-3xl shadow-2xl p-10 w-full max-w-md text-center">
             <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
               <AlertTriangle className="w-10 h-10 text-red-600" />
             </div>
@@ -1110,7 +1187,7 @@ export default function App() {
       {/* TRANSFER QR MODAL OVERLAY */}
       {transferQrBatchId && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md relative flex flex-col items-center text-center">
+          <div className="bg-white/50 backdrop-blur-md rounded-3xl shadow-2xl p-8 w-full max-w-md relative flex flex-col items-center text-center">
             <button onClick={() => setTransferQrBatchId(null)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-800 bg-slate-100 rounded-full p-2 transition-colors">
               <X className="w-5 h-5"/>
             </button>
@@ -1121,7 +1198,7 @@ export default function App() {
             <h3 className="text-2xl font-bold text-slate-800 mb-2">Transfer Recorded!</h3>
             <p className="text-sm text-slate-500 mb-6">Batch #{transferQrBatchId} ownership has been transferred on-chain. Print this updated QR code for the new holder.</p>
             
-            <div className="bg-white shadow-xl shadow-slate-200 p-4 rounded-3xl border border-slate-100 mb-6">
+            <div className="bg-white/50 backdrop-blur-md shadow-xl shadow-slate-200 p-4 rounded-3xl border border-slate-100 mb-6">
               <img 
                 src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(`${window.location.origin}/?batch=${transferQrBatchId}`)}`} 
                 alt="Transfer QR Code" 
@@ -1143,7 +1220,7 @@ export default function App() {
       {/* GENERATED SUB-BATCHES QR MODAL */}
       {generatedSubBatches && (
         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-4xl relative max-h-[90vh] overflow-y-auto">
+          <div className="bg-white/50 backdrop-blur-md rounded-3xl shadow-2xl p-8 w-full max-w-4xl relative max-h-[90vh] overflow-y-auto">
             <button onClick={() => setGeneratedSubBatches(null)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-800 bg-slate-100 rounded-full p-2 transition-colors z-10">
               <X className="w-5 h-5"/>
             </button>
@@ -1160,7 +1237,7 @@ export default function App() {
               {generatedSubBatches.subIds.map((subId, idx) => (
                 <div key={subId} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-col items-center hover:shadow-lg transition-shadow">
                   <div className="text-xs font-bold text-emerald-600 uppercase tracking-wider mb-2">Unit #{idx + 1}</div>
-                  <div className="bg-white p-2 rounded-xl border border-slate-100 w-full flex justify-center items-center overflow-hidden">
+                  <div className="bg-white/50 backdrop-blur-md p-2 rounded-xl border border-slate-100 w-full flex justify-center items-center overflow-hidden">
                     <Barcode 
                       value={subId} 
                       format="CODE128" 
@@ -1184,7 +1261,7 @@ export default function App() {
       )}
 
       {/* Header */}
-      <header className="bg-white shadow-sm border-b border-slate-200 py-4 px-8 flex justify-between items-center sticky top-0 z-50">
+      <header className="bg-white/50 backdrop-blur-md shadow-sm border-b border-slate-200 py-4 px-8 flex justify-between items-center sticky top-0 z-50">
         <div className="flex items-center gap-4">
           <button onClick={() => {
             setView("landing"); 
@@ -1218,7 +1295,7 @@ export default function App() {
                 <div className="relative" ref={notifPanelRef}>
                   <button
                     onClick={() => setShowNotifications(!showNotifications)}
-                    className="relative p-2.5 rounded-full border border-slate-200 hover:border-blue-400 bg-white hover:bg-blue-50 transition-all group"
+                    className="relative p-2.5 rounded-full border border-slate-200 hover:border-blue-400 bg-white/50 backdrop-blur-md hover:bg-blue-50 transition-all group"
                     title="Notifications"
                   >
                     <Bell className="w-5 h-5 text-slate-600 group-hover:text-blue-600 transition-colors" />
@@ -1231,7 +1308,7 @@ export default function App() {
 
                   {/* ── Notification Dropdown Panel ────────────── */}
                   {showNotifications && (
-                    <div className="absolute right-0 top-14 w-[420px] max-h-[70vh] bg-white rounded-2xl shadow-2xl border border-slate-200 z-[200] overflow-hidden flex flex-col animate-in">
+                    <div className="absolute right-0 top-14 w-[420px] max-h-[70vh] bg-white/95 backdrop-blur-3xl rounded-2xl shadow-2xl border border-slate-200 z-[200] overflow-hidden flex flex-col animate-in">
                       {/* Header */}
                       <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
                         <div className="flex items-center gap-2">
@@ -1318,7 +1395,7 @@ export default function App() {
 
                       {/* Footer */}
                       {notifications.length > 0 && (
-                        <div className="px-6 py-3 border-t border-slate-100 bg-slate-50/50 text-center">
+                        <div className="px-6 py-3 border-t border-slate-100 bg-white/50 backdrop-blur-md/30 backdrop-blur-md text-center">
                           <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">
                             {notifications.length} notification{notifications.length !== 1 ? 's' : ''} · Stored on-chain
                           </p>
@@ -1330,7 +1407,7 @@ export default function App() {
 
                 <button
                   onClick={signOut}
-                  className="border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-full font-medium transition-all"
+                  className="border border-slate-300 hover:border-slate-400 bg-white/50 backdrop-blur-md hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-full font-medium transition-all"
                 >
                   Sign Out
                 </button>
@@ -1353,7 +1430,7 @@ export default function App() {
           <>
             {!passAuth ? (
               <div className="flex flex-col items-center justify-center min-h-[50vh]">
-                <form onSubmit={handleAuth} className="bg-white p-10 rounded-3xl shadow-xl w-full max-w-sm border border-slate-100 text-center relative overflow-hidden">
+                <form onSubmit={handleAuth} className="bg-white/50 backdrop-blur-md p-10 rounded-3xl shadow-xl w-full max-w-sm border border-slate-100 text-center relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500 opacity-5 blur-[50px] rounded-full"></div>
                   <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6 relative z-10">
                     <ShieldCheck className="w-8 h-8" />
@@ -1374,7 +1451,7 @@ export default function App() {
                 </form>
               </div>
             ) : !account ? (
-              <div className="flex flex-col items-center justify-center min-h-[40vh] bg-white border border-slate-200 rounded-3xl p-10 text-center shadow-lg">
+              <div className="flex flex-col items-center justify-center min-h-[40vh] bg-white/50 backdrop-blur-md border border-slate-200 rounded-3xl p-10 text-center shadow-lg">
                 <Wallet className="w-16 h-16 text-slate-300 mb-6" />
                 <h2 className="text-2xl font-bold text-slate-800 mb-2">Connect Your Web3 Wallet</h2>
                 <p className="text-slate-500 max-w-md mb-8">
@@ -1385,7 +1462,7 @@ export default function App() {
                     <button
                       key={wallet.id}
                       onClick={() => connectWallet({ injectedProvider: wallet.provider, preferredWallet: wallet.id, walletLabel: wallet.label })}
-                      className="flex items-center gap-4 w-full rounded-2xl border-2 border-slate-200 hover:border-blue-500 bg-white hover:bg-blue-50 px-5 py-4 transition-all group"
+                      className="flex items-center gap-4 w-full rounded-2xl border-2 border-slate-200 hover:border-blue-500 bg-white/50 backdrop-blur-md hover:bg-blue-50 px-5 py-4 transition-all group"
                     >
                       <div className="w-10 h-10 rounded-xl bg-slate-100 group-hover:bg-blue-100 flex items-center justify-center flex-shrink-0 transition-colors overflow-hidden">
                         {wallet.icon
@@ -1413,14 +1490,14 @@ export default function App() {
                 {/* Role Status Bar */}
                 <div className="bg-gradient-to-r from-blue-900 to-indigo-900 rounded-2xl p-8 flex flex-col md:flex-row justify-between items-center text-white shadow-xl relative overflow-hidden">
                   <div className="flex items-center gap-4 mb-4 md:mb-0 relative z-10 w-full md:w-1/3">
-                    <div className="bg-white/10 p-4 rounded-full shrink-0">
+                    <div className="bg-white/50 backdrop-blur-md/10 p-4 rounded-full shrink-0">
                       <ShieldCheck className="w-8 h-8 text-blue-200" />
                     </div>
                     <div>
                       <h2 className="text-2xl font-bold text-white tracking-wide">Industry Workspace</h2>
                       <div className="flex items-center gap-3 mt-2">
                         <span className="bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-xs font-bold px-3 py-1 rounded-full">{activeBatchCountState} Active</span>
-                        <span className="bg-white/10 border border-white/10 text-blue-200 text-xs font-bold px-3 py-1 rounded-full">{totalBatchCount} Total</span>
+                        <span className="bg-white/50 backdrop-blur-md/10 border border-white/10 text-blue-200 text-xs font-bold px-3 py-1 rounded-full">{totalBatchCount} Total</span>
                         {totalBatchCount - activeBatchCountState > 0 && (
                           <span className="bg-amber-500/20 border border-amber-400/30 text-amber-300 text-xs font-bold px-3 py-1 rounded-full">{totalBatchCount - activeBatchCountState} Deactivated</span>
                         )}
@@ -1440,29 +1517,29 @@ export default function App() {
                     <div className="bg-slate-900/50 border border-white/10 rounded-xl px-5 py-3 text-sm font-mono text-blue-200 flex items-center gap-2 justify-center w-full sm:w-auto shrink-0 shadow-inner">
                       <Wallet className="w-4 h-4 text-blue-400 shrink-0"/> {account.slice(0,6)}...{account.slice(-4)}
                     </div>
-                    <button onClick={signOut} className="w-full sm:w-auto bg-white/10 hover:bg-white/20 border border-white/20 text-white py-2.5 px-6 rounded-xl font-medium transition flex items-center justify-center gap-2 shrink-0">
+                    <button onClick={signOut} className="w-full sm:w-auto bg-white/50 backdrop-blur-md/10 hover:bg-white/50 backdrop-blur-md/20 border border-white/20 text-white py-2.5 px-6 rounded-xl font-medium transition flex items-center justify-center gap-2 shrink-0">
                       Sign Out
                     </button>
                   </div>
                 </div>
 
                 {role === 0 && (
-                  <div className="bg-white rounded-3xl p-8 border border-amber-200 shadow-xl shadow-amber-100 relative overflow-hidden">
+                  <div className="bg-white/50 backdrop-blur-md rounded-3xl p-8 border border-amber-200 shadow-xl shadow-amber-100 relative overflow-hidden">
                     <div className="absolute top-0 left-0 w-2 h-full bg-amber-400"></div>
                     <h3 className="text-2xl font-bold text-slate-800 mb-2">Welcome! Choose Your Industry Role</h3>
                     <p className="text-slate-500 mb-8">Register your connected wallet with a role to begin participating in the supply chain.</p>
                     <div className="grid md:grid-cols-3 gap-6">
-                      <button onClick={() => registerRole(1)} className="border-2 border-slate-100 hover:border-blue-500 hover:bg-blue-50 bg-white p-6 rounded-2xl flex flex-col items-center transition-all group">
+                      <button onClick={() => registerRole(1)} className="border-2 border-slate-100 hover:border-blue-500 hover:bg-blue-50 bg-white/50 backdrop-blur-md p-6 rounded-2xl flex flex-col items-center transition-all group">
                         <Pill className="w-10 h-10 text-slate-400 group-hover:text-blue-500 mb-3" />
                         <span className="font-bold text-lg text-slate-800">Manufacturer</span>
                         <span className="text-xs text-slate-500 text-center mt-2">Can mint new medicine batches onto the blockchain.</span>
                       </button>
-                      <button onClick={() => registerRole(2)} className="border-2 border-slate-100 hover:border-purple-500 hover:bg-purple-50 bg-white p-6 rounded-2xl flex flex-col items-center transition-all group">
+                      <button onClick={() => registerRole(2)} className="border-2 border-slate-100 hover:border-purple-500 hover:bg-purple-50 bg-white/50 backdrop-blur-md p-6 rounded-2xl flex flex-col items-center transition-all group">
                         <Building2 className="w-10 h-10 text-slate-400 group-hover:text-purple-500 mb-3" />
                         <span className="font-bold text-lg text-slate-800">Distributor</span>
                         <span className="text-xs text-slate-500 text-center mt-2">Handles logistics and ownership transfers.</span>
                       </button>
-                      <button onClick={() => registerRole(3)} className="border-2 border-slate-100 hover:border-emerald-500 hover:bg-emerald-50 bg-white p-6 rounded-2xl flex flex-col items-center transition-all group">
+                      <button onClick={() => registerRole(3)} className="border-2 border-slate-100 hover:border-emerald-500 hover:bg-emerald-50 bg-white/50 backdrop-blur-md p-6 rounded-2xl flex flex-col items-center transition-all group">
                         <CheckCircle2 className="w-10 h-10 text-slate-400 group-hover:text-emerald-500 mb-3" />
                         <span className="font-bold text-lg text-slate-800 text-center">Retailer / Healthcare</span>
                         <span className="text-xs text-slate-500 text-center mt-2">Final destination before reaching the consumer.</span>
@@ -1473,7 +1550,7 @@ export default function App() {
 
                 <div className="grid md:grid-cols-3 gap-8">
                    {/* Manufacturer Panel */}
-                    <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 border border-slate-100 relative">
+                    <div className="bg-white/50 backdrop-blur-md/40 backdrop-blur-2xl rounded-3xl shadow-[0_8px_32px_rgba(30,58,138,0.05)] p-8 border border-white/60 relative">
                       <div className="flex items-center gap-3 mb-6">
                         <div className="p-3 bg-blue-100 text-blue-600 rounded-xl">
                           <Settings className="w-6 h-6" />
@@ -1504,7 +1581,7 @@ export default function App() {
                             <label className="block text-xs font-medium text-slate-500 mb-1">Expected Distributor</label>
                             <div className="flex flex-col gap-1.5">
                               <input value={expectedDistributor} onChange={e=>setExpectedDistributor(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-400 outline-none transition text-sm" placeholder="0x... (leave blank for open route)" />
-                              <select onChange={e => {if(e.target.value) setExpectedDistributor(e.target.value)}} className="px-3 py-2 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-400 outline-none bg-white text-xs text-slate-500">
+                              <select onChange={e => {if(e.target.value) setExpectedDistributor(e.target.value)}} className="px-3 py-2 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-400 outline-none bg-white/50 backdrop-blur-md text-xs text-slate-500">
                                 <option value="">Auto-fill demo...</option>
                                 <option value="0x70997970C51812dc3A010C7d01b50e0d17dc79C8">Account #1 (Distributor)</option>
                               </select>
@@ -1514,7 +1591,7 @@ export default function App() {
                             <label className="block text-xs font-medium text-slate-500 mb-1">Expected Retailer</label>
                             <div className="flex flex-col gap-1.5">
                               <input value={expectedRetailer} onChange={e=>setExpectedRetailer(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-400 outline-none transition text-sm" placeholder="0x... (leave blank for open route)" />
-                              <select onChange={e => {if(e.target.value) setExpectedRetailer(e.target.value)}} className="px-3 py-2 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-400 outline-none bg-white text-xs text-slate-500">
+                              <select onChange={e => {if(e.target.value) setExpectedRetailer(e.target.value)}} className="px-3 py-2 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-400 outline-none bg-white/50 backdrop-blur-md text-xs text-slate-500">
                                 <option value="">Auto-fill demo...</option>
                                 <option value="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC">Account #2 (Retailer)</option>
                               </select>
@@ -1528,7 +1605,7 @@ export default function App() {
                     </div>
 
                   {/* Transfer to Distributor Panel */}
-                    <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 border border-slate-100 relative">
+                    <div className="bg-white/50 backdrop-blur-md/40 backdrop-blur-2xl rounded-3xl shadow-[0_8px_32px_rgba(30,58,138,0.05)] p-8 border border-white/60 relative">
                       <div className="flex items-center gap-3 mb-6">
                         <div className="p-3 bg-purple-100 text-purple-600 rounded-xl">
                           <ArrowRight className="w-6 h-6" />
@@ -1546,7 +1623,7 @@ export default function App() {
                           </div>
                           <div>
                             <label className="block text-sm font-medium text-slate-600 mb-1">Status</label>
-                            <select value={transferStatus} onChange={e=>setTransferStatus(Number(e.target.value))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none bg-white">
+                            <select value={transferStatus} onChange={e=>setTransferStatus(Number(e.target.value))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none bg-white/50 backdrop-blur-md">
                               <option value={1}>In Transit</option>
                                <option value={2}>Delivered</option>
                             </select>
@@ -1556,9 +1633,11 @@ export default function App() {
                           <label className="block text-sm font-medium text-slate-600 mb-1">Receiver Address</label>
                           <div className="flex flex-col xl:flex-row gap-2">
                             <input required value={transferTo} onChange={e=>setTransferTo(e.target.value)} className="flex-1 px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none transition w-full" placeholder="0x..." />
-                            <select onChange={e => {if(e.target.value) setTransferTo(e.target.value)}} className="w-full xl:w-auto px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none bg-white text-sm text-slate-600">
+                            <select onChange={e => {if(e.target.value) setTransferTo(e.target.value)}} className="w-full xl:w-auto px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-purple-500 outline-none bg-white/50 backdrop-blur-md text-sm text-slate-600">
                               <option value="">Auto-fill Demo...</option>
-                              {role === 1 && <option value="0x70997970C51812dc3A010C7d01b50e0d17dc79C8">Account #1 (Distributor)</option>}
+                              <option value="0x70997970C51812dc3A010C7d01b50e0d17dc79C8">Account #1 (Distributor) [VALID ROUTE]</option>
+                              <option value="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC">Account #2 (Retailer) [FRAUD TEST]</option>
+                              <option value="0x90F79bf6EB2c4f870365E785982E1f101E93b906">Account #3 (Unknown) [FRAUD TEST]</option>
                             </select>
                           </div>
                         </div>
@@ -1580,7 +1659,7 @@ export default function App() {
                     </div>
 
                   {/* Transfer to Retailer Panel */}
-                    <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 border border-slate-100 relative">
+                    <div className="bg-white/50 backdrop-blur-md/40 backdrop-blur-2xl rounded-3xl shadow-[0_8px_32px_rgba(30,58,138,0.05)] p-8 border border-white/60 relative">
                       <div className="flex items-center gap-3 mb-6">
                         <div className="p-3 bg-emerald-100 text-emerald-600 rounded-xl">
                           <ArrowRight className="w-6 h-6" />
@@ -1598,7 +1677,7 @@ export default function App() {
                           </div>
                           <div>
                             <label className="block text-sm font-medium text-slate-600 mb-1">Status</label>
-                            <select value={retTransferStatus} onChange={e=>setRetTransferStatus(Number(e.target.value))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+                            <select value={retTransferStatus} onChange={e=>setRetTransferStatus(Number(e.target.value))} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none bg-white/50 backdrop-blur-md">
                               <option value={1}>In Transit</option>
                                <option value={2}>Delivered</option>
                             </select>
@@ -1608,9 +1687,10 @@ export default function App() {
                           <label className="block text-sm font-medium text-slate-600 mb-1">Receiver Address</label>
                           <div className="flex flex-col xl:flex-row gap-2">
                             <input required value={retTransferTo} onChange={e=>setRetTransferTo(e.target.value)} className="flex-1 px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none transition w-full" placeholder="0x..." />
-                            <select onChange={e => {if(e.target.value) setRetTransferTo(e.target.value)}} className="w-full xl:w-auto px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none bg-white text-sm text-slate-600">
+                            <select onChange={e => {if(e.target.value) setRetTransferTo(e.target.value)}} className="w-full xl:w-auto px-4 py-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none bg-white/50 backdrop-blur-md text-sm text-slate-600">
                               <option value="">Auto-fill Demo...</option>
-                              <option value="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC">Account #2 (Retailer)</option>
+                              <option value="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC">Account #2 (Retailer) [VALID ROUTE]</option>
+                              <option value="0x90F79bf6EB2c4f870365E785982E1f101E93b906">Account #3 (Unknown) [FRAUD TEST]</option>
                             </select>
                           </div>
                         </div>
@@ -1647,21 +1727,21 @@ export default function App() {
                     <div>
                       <label className="block text-sm font-medium text-slate-600 mb-1">Parent Batch ID</label>
                       <div className="flex gap-2">
-                        <input required type="text" value={splitBatchId} onChange={e=>setSplitBatchId(e.target.value.toUpperCase().trim())} className="w-full px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none transition bg-white" placeholder="e.g. BCH-XYZ" />
+                        <input required type="text" value={splitBatchId} onChange={e=>setSplitBatchId(e.target.value.toUpperCase().trim())} className="w-full px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none transition bg-white/50 backdrop-blur-md" placeholder="e.g. BCH-XYZ" />
                         <button type="button" onClick={() => { setScanTarget("splitBatch"); setShowScanner(true); }} className="px-4 py-3 bg-amber-100 hover:bg-amber-200 text-amber-600 rounded-xl transition border border-amber-200 flex-shrink-0"><QrCode className="w-5 h-5"/></button>
                       </div>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-600 mb-1">Number of Sub-Batches</label>
-                      <select value={splitCount} onChange={e=>setSplitCount(Number(e.target.value))} className="w-full px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+                      <select value={splitCount} onChange={e=>setSplitCount(Number(e.target.value))} className="w-full px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none bg-white/50 backdrop-blur-md">
                         {[...Array(50)].map((_,i) => <option key={i+1} value={i+1}>{i+1}</option>)}
                       </select>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-600 mb-1">Receiver Address</label>
                       <div className="flex flex-col xl:flex-row gap-2">
-                        <input required value={splitReceiver} onChange={e=>setSplitReceiver(e.target.value)} className="flex-1 px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none transition bg-white w-full" placeholder="0x..." />
-                        <select onChange={e => {if(e.target.value) setSplitReceiver(e.target.value)}} className="w-full xl:w-auto px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none bg-white text-sm text-slate-600">
+                        <input required value={splitReceiver} onChange={e=>setSplitReceiver(e.target.value)} className="flex-1 px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none transition bg-white/50 backdrop-blur-md w-full" placeholder="0x..." />
+                        <select onChange={e => {if(e.target.value) setSplitReceiver(e.target.value)}} className="w-full xl:w-auto px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none bg-white/50 backdrop-blur-md text-sm text-slate-600">
                           <option value="">Auto-fill Demo...</option>
                           <option value="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC">Account #2 (Retailer)</option>
                           <option value="0x70997970C51812dc3A010C7d01b50e0d17dc79C8">Account #1 (Distributor)</option>
@@ -1670,7 +1750,7 @@ export default function App() {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-600 mb-1">Location</label>
-                      <input required value={splitLocation} onChange={e=>setSplitLocation(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none transition bg-white" placeholder="Warehouse, City" />
+                      <input required value={splitLocation} onChange={e=>setSplitLocation(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-amber-200 focus:ring-2 focus:ring-amber-500 outline-none transition bg-white/50 backdrop-blur-md" placeholder="Warehouse, City" />
                     </div>
                     <div className="md:col-span-2">
                       <button type="submit" className="w-full bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-amber-500/30 flex items-center justify-center gap-2">
@@ -1681,7 +1761,7 @@ export default function App() {
                 </div>
 
                 {/* --- Operational Controls --- */}
-                <div className="mt-8 bg-white rounded-3xl p-8 border border-slate-100 shadow-xl shadow-slate-200/50">
+                <div className="mt-8 bg-white/50 backdrop-blur-md rounded-3xl p-8 border border-slate-100 shadow-xl shadow-slate-200/50">
                   <h3 className="text-xl font-bold flex items-center gap-2 mb-6 text-slate-800">
                     <ShieldCheck className="w-6 h-6 text-red-500" /> Security & Exception Handling
                   </h3>
@@ -1698,7 +1778,7 @@ export default function App() {
                         try {
                           const tx = await contract.recallBatch(recallId.toUpperCase().trim(), recallReason);
                           await tx.wait();
-                          alert("Batch Recalled successfully. It is now deactivated from the supply chain.");
+                          toast.success("Batch Recalled successfully. It is now deactivated from the supply chain.");
                           // Refresh counts
                           try {
                             const total = await contract.batchCount();
@@ -1707,10 +1787,10 @@ export default function App() {
                             setActiveBatchCountState(Number(active));
                           } catch {}
                           if (typeof fetchNotifications === "function") fetchNotifications();
-                        } catch (err) { alert("Error recalling batch. Make sure you are the Origin Manufacturer."); console.error(err); }
+                        } catch (err) { toast.error("Error recalling batch. Make sure you are the Origin Manufacturer."); console.error(err); }
                       }} className="space-y-4">
-                        <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-red-200 focus:ring-2 focus:ring-red-500 outline-none bg-white" onChange={e=>setRecallId(e.target.value)} />
-                        <input required type="text" placeholder="Reason for Recall" className="w-full px-4 py-3 rounded-xl border border-red-200 focus:ring-2 focus:ring-red-500 outline-none bg-white" onChange={e=>setRecallReason(e.target.value)} />
+                        <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-red-200 focus:ring-2 focus:ring-red-500 outline-none bg-white/50 backdrop-blur-md" onChange={e=>setRecallId(e.target.value)} />
+                        <input required type="text" placeholder="Reason for Recall" className="w-full px-4 py-3 rounded-xl border border-red-200 focus:ring-2 focus:ring-red-500 outline-none bg-white/50 backdrop-blur-md" onChange={e=>setRecallReason(e.target.value)} />
                         <button className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 rounded-xl transition-colors">Initiate Full Recall</button>
                       </form>
                     </div>
@@ -1727,7 +1807,7 @@ export default function App() {
                           try {
                             const tx = await contract.reportLost(lostId.toUpperCase().trim(), lostReason);
                             await tx.wait();
-                            alert("Batch status permanently updated to Lost/Destroyed. It is now deactivated.");
+                            toast.success("Batch status permanently updated to Lost/Destroyed. It is now deactivated.");
                             // Refresh counts
                             try {
                               const total = await contract.batchCount();
@@ -1736,10 +1816,10 @@ export default function App() {
                               setActiveBatchCountState(Number(active));
                             } catch {}
                             if (typeof fetchNotifications === "function") fetchNotifications();
-                          } catch (err) { alert("Error reporting batch. Must be Current Holder."); console.error(err); }
+                          } catch (err) { toast.error("Error reporting batch. Must be Current Holder."); console.error(err); }
                         }} className="space-y-4">
-                          <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white" onChange={e=>setLostId(e.target.value)} />
-                          <input required type="text" placeholder="Reason (e.g. Temperature breach)" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white" onChange={e=>setLostReason(e.target.value)} />
+                          <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white/50 backdrop-blur-md" onChange={e=>setLostId(e.target.value)} />
+                          <input required type="text" placeholder="Reason (e.g. Temperature breach)" className="w-full px-4 py-3 rounded-xl border border-orange-200 focus:ring-2 focus:ring-orange-500 outline-none bg-white/50 backdrop-blur-md" onChange={e=>setLostReason(e.target.value)} />
                           <button className="w-full bg-orange-600 hover:bg-orange-700 text-white font-medium py-3 rounded-xl transition-colors">Confirm Incident Details</button>
                         </form>
                     </div>
@@ -1755,7 +1835,7 @@ export default function App() {
                           try {
                             const tx = await contract.rejectBatch(rejectId.toUpperCase().trim(), rejectReason);
                             await tx.wait();
-                            alert("Batch rejected and permanently deactivated from the supply chain.");
+                            toast.success("Batch rejected and permanently deactivated from the supply chain.");
                             // Refresh counts
                             try {
                               const total = await contract.batchCount();
@@ -1763,10 +1843,10 @@ export default function App() {
                               setTotalBatchCount(Number(total));
                               setActiveBatchCountState(Number(active));
                             } catch {}
-                          } catch (err) { alert("Error rejecting batch. Must be Current Holder or Admin."); console.error(err); }
+                          } catch (err) { toast.error("Error rejecting batch. Must be Current Holder or Admin."); console.error(err); }
                         }} className="space-y-4">
-                          <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-rose-200 focus:ring-2 focus:ring-rose-500 outline-none bg-white" onChange={e=>setRejectId(e.target.value)} />
-                          <input required type="text" placeholder="Reason (e.g. Failed lab test)" className="w-full px-4 py-3 rounded-xl border border-rose-200 focus:ring-2 focus:ring-rose-500 outline-none bg-white" onChange={e=>setRejectReason(e.target.value)} />
+                          <input required type="text" placeholder="Batch ID" className="w-full px-4 py-3 rounded-xl border border-rose-200 focus:ring-2 focus:ring-rose-500 outline-none bg-white/50 backdrop-blur-md" onChange={e=>setRejectId(e.target.value)} />
+                          <input required type="text" placeholder="Reason (e.g. Failed lab test)" className="w-full px-4 py-3 rounded-xl border border-rose-200 focus:ring-2 focus:ring-rose-500 outline-none bg-white/50 backdrop-blur-md" onChange={e=>setRejectReason(e.target.value)} />
                           <button className="w-full bg-rose-600 hover:bg-rose-700 text-white font-medium py-3 rounded-xl transition-colors">Confirm Rejection</button>
                         </form>
                     </div>
@@ -1782,7 +1862,7 @@ export default function App() {
                           try {
                             const tx = await contract.rejectBatch(tempRejectId.toUpperCase().trim(), `Temperature breach: ${tempRejectVal}°C recorded. Cold chain failed.`);
                             await tx.wait();
-                            alert("Batch Rejected due to Temperature Deviation.");
+                            toast.success("Batch Rejected due to Temperature Deviation.");
                             try {
                               const total = await contract.batchCount();
                               const active = await contract.getActiveBatchCount();
@@ -1790,11 +1870,11 @@ export default function App() {
                               setActiveBatchCountState(Number(active));
                             } catch {}
                             setTempRejectId(""); setTempRejectVal("");
-                          } catch (err) { alert("Error rejecting batch. Must be Current Holder."); console.error(err); }
+                          } catch (err) { toast.error("Error rejecting batch. Must be Current Holder."); console.error(err); }
                         }} className="space-y-4">
-                          <input required type="text" placeholder="Batch ID" value={tempRejectId} onChange={e=>setTempRejectId(e.target.value.toUpperCase().trim())} className="w-full px-4 py-3 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none bg-white" />
+                          <input required type="text" placeholder="Batch ID" value={tempRejectId} onChange={e=>setTempRejectId(e.target.value.toUpperCase().trim())} className="w-full px-4 py-3 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none bg-white/50 backdrop-blur-md" />
                           <div className="relative">
-                            <input required type="number" step="0.1" placeholder="Recorded Temp (e.g. 12.5)" value={tempRejectVal} onChange={e=>setTempRejectVal(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none bg-white pr-10" />
+                            <input required type="number" step="0.1" placeholder="Recorded Temp (e.g. 12.5)" value={tempRejectVal} onChange={e=>setTempRejectVal(e.target.value)} className="w-full px-4 py-3 rounded-xl border border-blue-200 focus:ring-2 focus:ring-blue-500 outline-none bg-white/50 backdrop-blur-md pr-10" />
                             <span className="absolute right-4 top-3 text-slate-400 font-bold">°C</span>
                           </div>
                           <button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded-xl transition-colors">Discard & Quarantine</button>
@@ -1810,21 +1890,21 @@ export default function App() {
                     <Building2 className="w-6 h-6 text-indigo-400" /> Route Compliance Monitor
                   </h3>
                   <div className="grid md:grid-cols-4 gap-6 relative z-10">
-                    <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-6 text-center">
+                    <div className="bg-slate-800/40 backdrop-blur-lg border-slate-700/50 border border-slate-700 rounded-2xl p-6 text-center">
                       <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Transfers (You)</p>
                       <p className="text-3xl font-bold text-white">{distTotalTransfers}</p>
                     </div>
-                    <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-6 text-center">
+                    <div className="bg-slate-800/40 backdrop-blur-lg border-slate-700/50 border border-slate-700 rounded-2xl p-6 text-center">
                       <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Route Deviations</p>
                       <p className={`text-3xl font-bold ${distDeviations > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{distDeviations}</p>
                     </div>
-                    <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-6 text-center">
+                    <div className="bg-slate-800/40 backdrop-blur-lg border-slate-700/50 border border-slate-700 rounded-2xl p-6 text-center">
                       <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Compliance Score</p>
                       <p className={`text-3xl font-bold ${distTotalTransfers === 0 ? 'text-slate-500' : (distDeviations === 0 ? 'text-emerald-400' : (distDeviations / distTotalTransfers < 0.1 ? 'text-amber-400' : 'text-red-400'))}`}>
                         {distTotalTransfers === 0 ? '—' : `${Math.round(((distTotalTransfers - distDeviations) / distTotalTransfers) * 100)}%`}
                       </p>
                     </div>
-                    <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-6 flex flex-col items-center justify-center">
+                    <div className="bg-slate-800/40 backdrop-blur-lg border-slate-700/50 border border-slate-700 rounded-2xl p-6 flex flex-col items-center justify-center">
                       <div className={`w-16 h-16 rounded-full border-4 flex items-center justify-center ${distTotalTransfers === 0 ? 'border-slate-600' : (distDeviations === 0 ? 'border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.3)]' : 'border-amber-500 shadow-[0_0_15px_rgba(245,158,11,0.3)]')}`}>
                         {distTotalTransfers === 0 ? (
                           <span className="text-slate-500 text-xs font-bold">N/A</span>
@@ -1842,13 +1922,13 @@ export default function App() {
                 </div>
 
                 {/* --- Batch Audit / Verification --- */}
-                <div className="mt-8 bg-slate-900 rounded-3xl p-8 border border-slate-800 shadow-2xl overflow-hidden relative">
+                <div className="mt-8 bg-slate-900/60 backdrop-blur-3xl rounded-3xl p-8 border border-slate-700/50 shadow-2xl overflow-hidden relative">
                   <div className="absolute top-0 left-0 w-64 h-64 bg-cyan-500 opacity-5 blur-[100px] rounded-full"></div>
                   <h3 className="text-xl font-bold flex items-center gap-2 mb-6 text-white relative z-10">
                     <Search className="w-6 h-6 text-cyan-400" /> Internal Batch Audit
                   </h3>
                   <form onSubmit={verifyBatch} className="flex gap-4 mb-8 relative z-10">
-                    <input required type="text" value={verifyId} onChange={e=>setVerifyId(e.target.value.toUpperCase().trim())} className="flex-1 px-4 py-3 rounded-xl border border-slate-700 bg-slate-800/80 text-white placeholder-slate-500 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none transition-all" placeholder="Enter Batch ID (e.g. BCH-XYZ) to audit timeline..." />
+                    <input required type="text" value={verifyId} onChange={e=>setVerifyId(e.target.value.toUpperCase().trim())} className="flex-1 px-4 py-3 rounded-xl border border-slate-700 bg-slate-800/40 backdrop-blur-lg border-slate-700/50 text-white placeholder-slate-500 focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 outline-none transition-all" placeholder="Enter Batch ID (e.g. BCH-XYZ) to audit timeline..." />
                     <button type="submit" className="bg-cyan-600 hover:bg-cyan-500 text-white font-bold px-8 py-3 rounded-xl transition-all shadow-lg shadow-cyan-600/30">Audit Tracker</button>
                   </form>
 
@@ -1918,7 +1998,7 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div className="lg:w-[400px] grid grid-cols-2 gap-x-6 gap-y-6 bg-slate-950/50 p-6 rounded-2xl border border-slate-800">
+                        <div className="lg:w-[400px] grid grid-cols-2 gap-x-6 gap-y-6 bg-slate-900/40 backdrop-blur-md/50 p-6 rounded-2xl border border-slate-800">
                           <div>
                             <span className="block text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Status</span>
                             <span className="text-white font-medium text-lg">{STATUS[Number(batchInfo.status)]}</span>
@@ -2063,7 +2143,7 @@ export default function App() {
 
         {/* === VERIFY / CUSTOMER VIEW === */}
         {view === "customer" && (
-          <div className="bg-slate-900 rounded-3xl shadow-2xl shadow-blue-900/20 overflow-hidden ring-1 ring-slate-800">
+          <div className="bg-slate-900/60 backdrop-blur-3xl rounded-3xl shadow-2xl border border-slate-700/50 shadow-blue-900/20 overflow-hidden ring-1 ring-slate-800">
             <div className="p-8 md:p-12 relative overflow-hidden">
                <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500 opacity-10 blur-[100px] rounded-full"></div>
               <div className="max-w-xl mb-8 relative z-10">
@@ -2072,7 +2152,7 @@ export default function App() {
               </div>
               
               <form onSubmit={verifyBatch} className="flex flex-col sm:flex-row gap-4 max-w-lg relative z-10">
-                <input required type="text" value={verifyId} onChange={e=>setVerifyId(e.target.value.toUpperCase().trim())} className="flex-1 px-6 py-4 rounded-xl border border-slate-700 bg-slate-800/80 text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-lg transition-all" placeholder="Enter Batch ID (e.g. BCH-XYZ)" />
+                <input required type="text" value={verifyId} onChange={e=>setVerifyId(e.target.value.toUpperCase().trim())} className="flex-1 px-6 py-4 rounded-xl border border-slate-700 bg-slate-800/40 backdrop-blur-lg border-slate-700/50 text-white placeholder-slate-500 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-lg transition-all" placeholder="Enter Batch ID (e.g. BCH-XYZ)" />
                 <button type="submit" className="bg-blue-600 hover:bg-blue-500 text-white px-8 font-bold text-lg rounded-xl transition-all hover:shadow-[0_0_20px_rgba(37,99,235,0.4)]">
                   Verify
                 </button>
@@ -2135,7 +2215,7 @@ export default function App() {
               };
               const deactivation = deactivationMessages[statusNum];
               return (
-              <div className="bg-slate-800 border-t border-slate-700 p-8 md:p-12">
+              <div className="bg-slate-800/40 backdrop-blur-lg border-t border-slate-700/50 p-8 md:p-12">
                 {isDeactivated && deactivation && (
                   <div className={`mb-8 p-6 rounded-2xl border-2 flex items-start gap-4 ${
                     deactivation.color === "red" ? "bg-red-950/50 border-red-500/50" :
@@ -2189,7 +2269,7 @@ export default function App() {
                         </p>
                         
                         <div className="grid md:grid-cols-2 gap-4 mt-6 border-t border-orange-200/60 pt-6">
-                          <div className="bg-white/60 p-5 rounded-2xl border border-orange-100">
+                          <div className="bg-white/50 backdrop-blur-md/60 p-5 rounded-2xl border border-orange-100">
                             <h4 className="font-bold text-emerald-700 flex items-center gap-2 mb-2">
                               <CheckCircle2 className="w-5 h-5"/> If you just bought this:
                             </h4>

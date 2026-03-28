@@ -1,5 +1,5 @@
 {
-  "contractAddress": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+  "contractAddress": "0x67d269191c92Caf3cD7723F116c85e6E9bf55933",
   "abi": [
     {
       "inputs": [],
@@ -187,6 +187,37 @@
         {
           "indexed": false,
           "internalType": "string",
+          "name": "parentBatchId",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "subBatchId",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "index",
+          "type": "uint256"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "splitBy",
+          "type": "address"
+        }
+      ],
+      "name": "BatchSplit",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "string",
           "name": "batchId",
           "type": "string"
         },
@@ -218,6 +249,31 @@
         {
           "indexed": false,
           "internalType": "string",
+          "name": "attemptedBatchId",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "scanner",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "timestamp",
+          "type": "uint256"
+        }
+      ],
+      "name": "FakeQrScanned",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "string",
           "name": "batchId",
           "type": "string"
         },
@@ -235,6 +291,43 @@
         }
       ],
       "name": "FraudAlert",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "recipient",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint256",
+          "name": "notificationId",
+          "type": "uint256"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "batchId",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "string",
+          "name": "message",
+          "type": "string"
+        },
+        {
+          "indexed": false,
+          "internalType": "enum PharmaTracking.Severity",
+          "name": "severity",
+          "type": "uint8"
+        }
+      ],
+      "name": "NotificationCreated",
       "type": "event"
     },
     {
@@ -286,6 +379,19 @@
       ],
       "name": "UserRegistered",
       "type": "event"
+    },
+    {
+      "inputs": [],
+      "name": "SCAN_THRESHOLD",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
     },
     {
       "inputs": [],
@@ -426,6 +532,11 @@
           "internalType": "address",
           "name": "expectedRetailer",
           "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "parentBatchId",
+          "type": "string"
         }
       ],
       "stateMutability": "view",
@@ -478,6 +589,25 @@
         }
       ],
       "name": "deviationCount",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "name": "fakeQrAttempts",
       "outputs": [
         {
           "internalType": "uint256",
@@ -567,6 +697,11 @@
               "internalType": "address",
               "name": "expectedRetailer",
               "type": "address"
+            },
+            {
+              "internalType": "string",
+              "name": "parentBatchId",
+              "type": "string"
             }
           ],
           "internalType": "struct PharmaTracking.Batch",
@@ -673,6 +808,56 @@
     },
     {
       "inputs": [],
+      "name": "getMyNotifications",
+      "outputs": [
+        {
+          "components": [
+            {
+              "internalType": "uint256",
+              "name": "id",
+              "type": "uint256"
+            },
+            {
+              "internalType": "string",
+              "name": "batchId",
+              "type": "string"
+            },
+            {
+              "internalType": "string",
+              "name": "message",
+              "type": "string"
+            },
+            {
+              "internalType": "address",
+              "name": "triggeredBy",
+              "type": "address"
+            },
+            {
+              "internalType": "uint256",
+              "name": "timestamp",
+              "type": "uint256"
+            },
+            {
+              "internalType": "enum PharmaTracking.Severity",
+              "name": "severity",
+              "type": "uint8"
+            },
+            {
+              "internalType": "bool",
+              "name": "read",
+              "type": "bool"
+            }
+          ],
+          "internalType": "struct PharmaTracking.Notification[]",
+          "name": "",
+          "type": "tuple[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
       "name": "getMyRole",
       "outputs": [
         {
@@ -687,12 +872,73 @@
     {
       "inputs": [
         {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        }
+      ],
+      "name": "getScanRecord",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        }
+      ],
+      "name": "getSubBatches",
+      "outputs": [
+        {
+          "internalType": "string[]",
+          "name": "",
+          "type": "string[]"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
           "internalType": "address",
           "name": "_user",
           "type": "address"
         }
       ],
       "name": "getTotalTransfers",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "getUnreadCount",
       "outputs": [
         {
           "internalType": "uint256",
@@ -724,6 +970,44 @@
     },
     {
       "inputs": [],
+      "name": "markAllRead",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        },
+        {
+          "internalType": "string",
+          "name": "_location",
+          "type": "string"
+        }
+      ],
+      "name": "markAsSold",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint256",
+          "name": "_nid",
+          "type": "uint256"
+        }
+      ],
+      "name": "markNotificationRead",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
       "name": "owner",
       "outputs": [
         {
@@ -749,6 +1033,19 @@
         }
       ],
       "name": "recallBatch",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_batchId",
+          "type": "string"
+        }
+      ],
+      "name": "recordScan",
       "outputs": [],
       "stateMutability": "nonpayable",
       "type": "function"
@@ -793,6 +1090,19 @@
       "inputs": [
         {
           "internalType": "string",
+          "name": "_fakeBatchId",
+          "type": "string"
+        }
+      ],
+      "name": "reportFakeQR",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
           "name": "_batchId",
           "type": "string"
         },
@@ -805,6 +1115,87 @@
       "name": "reportLost",
       "outputs": [],
       "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "name": "scanRecords",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "totalScans",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "lastScanTime",
+          "type": "uint256"
+        },
+        {
+          "internalType": "bool",
+          "name": "flagged",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "_parentBatchId",
+          "type": "string"
+        },
+        {
+          "internalType": "uint256",
+          "name": "_count",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "_receiver",
+          "type": "address"
+        },
+        {
+          "internalType": "string",
+          "name": "_location",
+          "type": "string"
+        }
+      ],
+      "name": "splitBatch",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "name": "subBatchIds",
+      "outputs": [
+        {
+          "internalType": "string",
+          "name": "",
+          "type": "string"
+        }
+      ],
+      "stateMutability": "view",
       "type": "function"
     },
     {
